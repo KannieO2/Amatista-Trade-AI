@@ -33,7 +33,7 @@ from .auth import (
     COOKIE, LOGIN_HTML, MAX_AGE, auth_enabled, check_credentials, make_token, valid_token,
 )
 
-from . import store
+from . import grid_sync, store
 from .account import real_balances
 from .dashboard import DASHBOARD_HTML
 from .executor import ExecMode, ExecutionEngine, Side, current_mode
@@ -56,6 +56,9 @@ GRID_TICK_SECONDS = int(os.getenv("GRVT_TICK_SECONDS", "15"))
 # Velocity watcher cadence — the fast loop that fires on volume acceleration
 # between slow scans (this is the real-time entry trigger).
 VELOCITY_TICK_SECONDS = int(os.getenv("PUMP_VELOCITY_TICK_SECONDS", "20"))
+# Grid→Supabase mirror cadence — copies the embedded GRVTBot state into the
+# shared realtime store. No-op when Supabase or the bot is unavailable.
+GRID_SYNC_SECONDS = int(os.getenv("GRID_SYNC_SECONDS", "60"))
 
 
 class CandidateStatus(StrEnum):
@@ -170,6 +173,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_monitor_loop()),
         asyncio.create_task(_velocity_loop()),
         asyncio.create_task(_account_loop()),
+        asyncio.create_task(_grid_sync_loop()),
     ]
     try:
         yield
@@ -177,6 +181,7 @@ async def lifespan(app: FastAPI):
         for task in tasks:
             task.cancel()
         await _velocity.close()
+        await grid_sync.close()
         await store.close()
 
 
@@ -202,6 +207,18 @@ async def _grid_tick_loop() -> None:
         except Exception:
             logger.exception("grid tick failed")
         await asyncio.sleep(GRID_TICK_SECONDS)
+
+
+async def _grid_sync_loop() -> None:
+    """Mirror the embedded GRVTBot state into Supabase on a timer (best-effort)."""
+    if not store.enabled():
+        return
+    while True:
+        try:
+            await grid_sync.sync_once()
+        except Exception:
+            logger.exception("grid sync failed")
+        await asyncio.sleep(GRID_SYNC_SECONDS)
 
 
 async def _monitor_loop() -> None:
