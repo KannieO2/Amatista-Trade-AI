@@ -18,9 +18,6 @@ echo  Abre tu navegador en:  http://localhost:8000
 echo  Para apagarlo: cierra esta ventana.
 echo.
 
-rem Lanzar GRVTBot (real) en su propia ventana si hay node instalado.
-where node >nul 2>nul && start "GRVTBot" cmd /c "%~dp0start-grvtbot.bat"
-
 start "" http://localhost:8000
 ".venv\Scripts\python.exe" -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir "apps\pump-reader"
 pause

@@ -615,7 +615,7 @@ async function loadOverview(){
   }).join("") : `<tr><td colspan="6" class="empty">No candidates yet · run Update</td></tr>`;
 
   $("alerts-body").innerHTML = (d.latest_alerts||[]).length ? d.latest_alerts.map(a=>{
-    return `<div class="alert">
+    return `<div class="alert" style="cursor:pointer" onclick="openCandidate('${a.symbol}','')">
       <span class="scoreb mono" style="color:var(--pink);background:rgba(255,47,110,.14)">${a.score}</span>
       <div class="meta"><div class="top"><b>${a.symbol}</b><span class="tag"><span class="cdot" style="background:${clusterColor(a.cluster)}"></span>${tcase(a.cluster)}</span></div>
       <div class="sub">ScamPump candidate: ${a.symbol}</div></div>
@@ -627,6 +627,12 @@ async function loadOverview(){
 // ---- grvt ----
 let grvtFormInit=false;
 function money(n){return (n<0?"-$":"$")+Math.abs(Number(n)).toLocaleString(undefined,{maximumFractionDigits:2});}
+// Compact, locale-proof money: $14.8K / $14.9M / $80.9M (avoids ambiguous separators).
+function moneyC(n){n=Number(n)||0;const a=Math.abs(n),s=n<0?"-":"";
+  if(a>=1e9)return s+"$"+(a/1e9).toFixed(2)+"B";
+  if(a>=1e6)return s+"$"+(a/1e6).toFixed(2)+"M";
+  if(a>=1e3)return s+"$"+(a/1e3).toFixed(1)+"K";
+  return s+"$"+a.toFixed(a<1?6:2);}
 async function loadGrvt(){
   let g; try{ g=await (await fetch("/grvt/status")).json(); }catch(e){ return; }
   $("grvt-badge").innerHTML = g.running
@@ -772,7 +778,7 @@ async function loadAlerts(){
   const al=c.filter(t=>t.status==="waiting_confirmation");
   $("al-ts").textContent=new Date().toLocaleTimeString(); $("al-count").textContent=al.length+" active";
   $("al-body").innerHTML = al.length ? al.map(a=>`
-    <div class="alert">${scoreBadge(a.pump_score)}
+    <div class="alert" style="cursor:pointer" onclick="openCandidate('${a.symbol}','${a.exchange}')">${scoreBadge(a.pump_score)}
       <div class="meta"><div class="top"><b>${a.symbol}</b><span class="px">${upx(a.exchange)}</span>
         <span class="tag"><span class="cdot" style="background:${clusterColor(a.cluster)}"></span>${tcase(a.cluster)}</span></div>
         <div class="sub">ScamPump candidate: ${a.symbol} · ${(a.flags||[]).map(tcase).join(", ")||"no flags"}</div></div>
@@ -881,7 +887,7 @@ function contributions(c){
     ["Volume spike", v, 45, vs+"x", true],
     ["Price Δ24h", p, 35, (pc>=0?"+":"")+pc+"%", true],
     ["Book pressure", i, 20, (imb*100).toFixed(0)+"%", true],
-    ["Low-liquidity trap", l, 15, "$"+Math.round(liq).toLocaleString(), true],
+    ["Low-liquidity trap", l, 15, moneyC(liq), true],
     ["OI / MCap", 0, 20, "n/a", false],
     ["L/S Ratio", 0, 10, "n/a", false],
     ["Concentration", 0, 20, "n/a", false],
@@ -903,7 +909,7 @@ function radarSvg(c){
     ["Concentr.", 0, false],
     ["CEX Inflow", 0, false],
   ];
-  const cx=130,cy=125,R=92,n=axes.length;
+  const cx=160,cy=146,R=92,n=axes.length;
   const ang=i=>(-90 + i*360/n)*Math.PI/180;
   const pt=(i,r)=>[cx+Math.cos(ang(i))*R*r, cy+Math.sin(ang(i))*R*r];
   let rings="";
@@ -913,12 +919,14 @@ function radarSvg(c){
   });
   let spokes="", labels="";
   axes.forEach((a,i)=>{
-    const [ex,ey]=pt(i,1), [lx,ly]=pt(i,1.16);
+    const co=Math.cos(ang(i));
+    const [ex,ey]=pt(i,1), [lx,ly]=pt(i,1.13);
+    const anchor=co>0.3?"start":co<-0.3?"end":"middle";
     spokes+=`<line x1="${cx}" y1="${cy}" x2="${ex.toFixed(1)}" y2="${ey.toFixed(1)}" stroke="rgba(255,255,255,.07)"/>`;
-    labels+=`<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" font-size="9.5" fill="${a[2]?'#8b95a7':'#4d5566'}">${a[0]}</text>`;
+    labels+=`<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}" dominant-baseline="middle" font-size="10" fill="${a[2]?'#9aa4b5':'#4d5566'}">${a[0]}</text>`;
   });
   const poly=axes.map((a,i)=>pt(i,Math.max(a[1],0.001)).map(x=>x.toFixed(1)).join(",")).join(" ");
-  return `<svg width="260" height="250" viewBox="0 0 260 250">${rings}${spokes}
+  return `<svg width="100%" viewBox="0 0 320 300" style="display:block;max-width:340px;margin:0 auto">${rings}${spokes}
     <polygon points="${poly}" fill="rgba(124,108,255,.22)" stroke="var(--purple)" stroke-width="1.6"/>
     ${axes.map((a,i)=>{const[px,py]=pt(i,Math.max(a[1],0.001));return `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="2.4" fill="${a[2]?'var(--purple)':'#4d5566'}"/>`}).join("")}
     ${labels}</svg>`;
@@ -939,7 +947,7 @@ async function loadMarketChip(sym){
     const m=await (await fetch(`/token/market?symbol=${encodeURIComponent(sym)}`)).json();
     if(!el) return;
     if(m.found){
-      const mc=m.market_cap_usd?money(m.market_cap_usd):"n/a", fdv=m.fdv_usd?money(m.fdv_usd):"n/a";
+      const mc=m.market_cap_usd?moneyC(m.market_cap_usd):"n/a", fdv=m.fdv_usd?moneyC(m.fdv_usd):"n/a";
       el.style.color="var(--muted-2)";
       el.textContent=`MCap ${mc} · FDV ${fdv}${m.approx?" ~":""}`;
       el.title=m.name?`CoinGecko: ${m.name}${m.approx?" (ticker shared — largest mcap)":""}`:"CoinGecko";
@@ -966,7 +974,7 @@ async function renderCandidate(c){
     <span class="tag"><span class="cdot" style="background:${clusterColor(c.cluster)}"></span>${tcase(c.cluster)}</span>
     <span class="badge" style="background:var(--inset)">age ${ago(c.updated_at)}</span>
     <span class="badge" style="background:var(--inset)">Top20% ${(c.orderbook_imbalance*100).toFixed(1)}%</span>
-    <span class="badge" style="background:var(--inset)">Liq ${money(c.liquidity_usd)}</span>
+    <span class="badge" style="background:var(--inset)">Liq ${moneyC(c.liquidity_usd)}</span>
     <span class="badge" id="cd-mcap" style="background:var(--inset);color:var(--muted)">MCap … · FDV …</span>`;
   loadMarketChip(c.symbol);
   $("cd-tags").innerHTML=`<span class="px">confidence <b class="mono">${c.confidence_score}</b>/100</span>
@@ -1022,7 +1030,7 @@ function timelineTab(d){
       <div class="sbox"><div class="l">Last</div><div class="v mono">${s.last}</div></div>
       <div class="sbox"><div class="l">Δ24h</div><div class="v mono">${(s.price_change_pct_24h>=0?'+':'')}${s.price_change_pct_24h}%</div></div>
       <div class="sbox"><div class="l">Vol spike</div><div class="v mono">${s.vol_spike}x</div></div>
-      <div class="sbox"><div class="l">Quote vol 24h</div><div class="v mono">${money(s.quote_volume_24h)}</div></div>
+      <div class="sbox"><div class="l">Quote vol 24h</div><div class="v mono">${moneyC(s.quote_volume_24h)}</div></div>
     </div>`;
 }
 function holdersTab(d){
@@ -1031,7 +1039,7 @@ function holdersTab(d){
     ${depthLadder(dp)}
     <div class="statgrid" style="margin-top:12px">
       <div class="sbox"><div class="l">Bid imbalance (Top20%)</div><div class="v mono">${(dp.imbalance*100).toFixed(1)}%</div></div>
-      <div class="sbox"><div class="l">Resting liquidity ±2%</div><div class="v mono">${money(dp.liquidity_usd)}</div></div>
+      <div class="sbox"><div class="l">Resting liquidity ±2%</div><div class="v mono">${moneyC(dp.liquidity_usd)}</div></div>
     </div>`;
 }
 function inflowsTab(d){
@@ -1042,7 +1050,7 @@ function inflowsTab(d){
     <div style="display:flex;gap:3px;align-items:flex-end">${bars}</div>
     <div class="statgrid" style="margin-top:12px">
       <div class="sbox"><div class="l">Vol spike (last closed)</div><div class="v mono">${s.vol_spike}x</div></div>
-      <div class="sbox"><div class="l">Quote vol 24h</div><div class="v mono">${money(s.quote_volume_24h)}</div></div>
+      <div class="sbox"><div class="l">Quote vol 24h</div><div class="v mono">${moneyC(s.quote_volume_24h)}</div></div>
     </div>`;
 }
 function alertsTab(c, alertsN){
@@ -1062,11 +1070,11 @@ function scoringTab(c){
   const signals=[
     ["Δ24h",(c.price_change_pct_24h>=0?"+":"")+c.price_change_pct_24h+"%"],
     ["Volume",c.volume_spike+"x"],["Top20%",(c.orderbook_imbalance*100).toFixed(1)+"%"],
-    ["Liquidity","$"+Math.round(c.liquidity_usd).toLocaleString()],
+    ["Liquidity",moneyC(c.liquidity_usd)],
     ["Last price",c.last_price],["Status",tcase(c.status)],
   ].map(s=>`<div class="sbox"><div class="l">${s[0]}</div><div class="v mono" style="font-size:14px">${s[1]}</div></div>`).join("");
   return `
-    <div style="display:grid;grid-template-columns:270px 1fr;gap:18px;align-items:start">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;align-items:start">
       <div>
         <div class="navlabel" style="padding:0 0 4px">Component radar</div>
         ${radarSvg(c)}
