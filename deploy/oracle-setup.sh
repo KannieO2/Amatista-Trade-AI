@@ -69,6 +69,9 @@ else
   git clone "$GRVT_REPO" "$GRVT_DIR"
 fi
 git -C "$GRVT_DIR" checkout -f "$GRVT_REF"
+# Strip the upstream "GRVT referral" card from Settings (not wanted in this app).
+perl -0pi -e "s{\s*<Card>\s*<h2[^>]*>\s*\{t\(.settings\.sectionReferral.\)\}.*?</Card>}{}s" \
+  "$GRVT_DIR/packages/dashboard/src/pages/settings.tsx" || true
 ( cd "$GRVT_DIR" \
   && npm install \
   && npm run build --workspace=@grvt-grid/bot \

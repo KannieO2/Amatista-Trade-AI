@@ -14,6 +14,8 @@ git -C "$APP_DIR" pull --ff-only
 # Rebuild GRVTBot only if it's present (it lives outside the repo).
 if [ -d "$GRVT_DIR/.git" ]; then
   git -C "$GRVT_DIR" fetch origin && git -C "$GRVT_DIR" checkout -f "$GRVT_REF"
+  perl -0pi -e "s{\s*<Card>\s*<h2[^>]*>\s*\{t\(.settings\.sectionReferral.\)\}.*?</Card>}{}s" \
+    "$GRVT_DIR/packages/dashboard/src/pages/settings.tsx" || true
   ( cd "$GRVT_DIR" \
     && npm install \
     && npm run build --workspace=@grvt-grid/bot \
