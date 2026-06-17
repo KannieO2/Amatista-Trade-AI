@@ -331,9 +331,11 @@ DASHBOARD_HTML = r"""<!doctype html>
           </div>
           <div class="gactions">
             <button class="btn primary" id="g-start">Configure &amp; Start</button>
+            <button class="btn" id="g-back">Backtest 7d</button>
             <button class="btn" id="g-stop">Stop</button>
             <span class="px" id="g-msg"></span>
           </div>
+          <div id="g-bt" style="margin-top:12px"></div>
           <div class="empty" id="grvt-note" style="text-align:left;padding:12px 0 0"></div>
         </div>
 
@@ -725,6 +727,28 @@ $("g-start").addEventListener("click", async ()=>{
   }catch(e){ $("g-msg").textContent="start failed"; }
 });
 $("g-stop").addEventListener("click", async ()=>{ try{ await fetch("/grvt/stop",{method:"POST"}); $("g-msg").textContent="stopped"; loadGrvt(); }catch(e){} });
+$("g-back").addEventListener("click", async ()=>{
+  const body={pair:$("g-pair").value,lower:Number($("g-lower").value),upper:Number($("g-upper").value),levels:Number($("g-levels").value),capital:Number($("g-capital").value),timeframe:"1h",limit:168};
+  $("g-msg").textContent="backtesting…"; $("g-bt").innerHTML='<div class="empty">running 7-day backtest…</div>';
+  try{
+    const r=await fetch("/grvt/backtest",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    if(!r.ok){ $("g-bt").innerHTML=`<div class="empty">backtest error: ${(await r.json()).detail}</div>`; $("g-msg").textContent=""; return; }
+    const b=await r.json(); $("g-msg").textContent="";
+    const up=b.net_profit>=0;
+    $("g-bt").innerHTML=`<div class="navlabel" style="padding:0 0 8px">Backtest · ${b.pair} · ${b.days}d · ${b.candles} candles</div>
+      <div class="statgrid">
+        <div class="sbox"><div class="l">Net profit</div><div class="v mono" style="color:${up?'var(--green)':'var(--red)'}">${money(b.net_profit)}</div></div>
+        <div class="sbox"><div class="l">ROI</div><div class="v mono" style="color:${up?'var(--green)':'var(--red)'}">${b.roi_pct}%</div></div>
+        <div class="sbox"><div class="l">Round trips</div><div class="v mono">${b.round_trips}</div></div>
+      </div>
+      <div class="statgrid" style="margin-top:8px">
+        <div class="sbox"><div class="l">Max drawdown</div><div class="v mono" style="color:var(--red)">${b.max_drawdown_pct}%</div></div>
+        <div class="sbox"><div class="l">Fees</div><div class="v mono">${money(b.fees)}</div></div>
+        <div class="sbox"><div class="l">Profit factor</div><div class="v mono">${b.profit_factor}</div></div>
+      </div>
+      <div class="px" style="margin-top:8px">Simulated grid over real ${b.timeframe} candles. Past performance ≠ future.</div>`;
+  }catch(e){ $("g-bt").innerHTML='<div class="empty">backtest failed</div>'; $("g-msg").textContent=""; }
+});
 setInterval(()=>{ if(!$("view-grvt").classList.contains("hidden")) loadGrvt(); }, 8000);
 
 // ---- update button ----

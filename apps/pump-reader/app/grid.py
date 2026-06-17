@@ -145,6 +145,102 @@ class GridBot:
         }
 
 
+async def fetch_ohlcv_for(pair: str, timeframe: str = "1h", limit: int = 168,
+                          exchange_id: str | None = None) -> list[list[float]]:
+    """Historical candles for the grid backtester (public, no keys)."""
+    eid = exchange_id or GRID_PRICE_EXCHANGE
+    if not hasattr(ccxt, eid):
+        return []
+    exchange = getattr(ccxt, eid)({"enableRateLimit": True})
+    try:
+        return await exchange.fetch_ohlcv(pair.upper(), timeframe=timeframe, limit=limit)
+    except Exception:
+        return []
+    finally:
+        await exchange.close()
+
+
+def backtest(lower: float, upper: float, levels: int, capital: float,
+             candles: list[list[float]], fee_pct: float = 0.05) -> dict:
+    """Stateless grid backtest over historical candles. Ported from GRVTBot's
+    runBacktest: walk each candle, fill levels within its range, realise the
+    grid spread on each round trip (fee on both legs), track equity + drawdown.
+    Spot long-only (leverage 1). Candle = [ts_ms, o, h, l, c, v]."""
+    if not candles or upper <= lower or levels < 2 or capital <= 0:
+        return {"net_profit": 0, "gross_profit": 0, "fees": 0, "roi_pct": 0,
+                "round_trips": 0, "avg_per_trip": 0, "max_drawdown_pct": 0,
+                "profit_factor": 0, "days": 0, "candles": 0, "equity_curve": []}
+    n = levels
+    spacing = (upper - lower) / n
+    mid = (lower + upper) / 2
+    qty = (capital * 0.75) / n / mid if mid > 0 else 0.0
+    fee_rate = fee_pct / 100
+    first_close = candles[0][4]
+    lv = []
+    for i in range(n + 1):
+        price = lower + i * spacing
+        lv.append({"i": i, "price": price, "side": "buy" if price < first_close else "sell",
+                   "filled": False, "qty": qty})
+
+    equity = capital
+    hwm = equity
+    maxdd = gp = gl = fees = 0.0
+    trips = 0
+    pos = cost = 0.0
+    curve: list[dict] = []
+    for c in candles:
+        ts, hi, lo, close = c[0], c[2], c[3], c[4]
+        for level in lv:
+            if level["filled"]:
+                continue
+            hit = lo <= level["price"] if level["side"] == "buy" else hi >= level["price"]
+            if not hit:
+                continue
+            level["filled"] = True
+            if level["side"] == "buy":
+                pos += level["qty"]
+                cost += level["price"] * level["qty"]
+            else:
+                ci = level["i"] - 1
+                if 0 <= ci < len(lv):
+                    cl = lv[ci]
+                    gross = (level["price"] - cl["price"]) * level["qty"]
+                    fee = (cl["price"] + level["price"]) * level["qty"] * fee_rate
+                    gp += gross if gross > 0 else 0
+                    gl += abs(gross) if gross < 0 else 0
+                    fees += fee
+                    trips += 1
+                    equity += gross - fee
+                new_pos = max(0.0, pos - level["qty"])
+                cost = cost * (new_pos / pos) if pos > 0 else 0.0
+                pos = new_pos
+            ci = level["i"] + 1 if level["side"] == "buy" else level["i"] - 1
+            if 0 <= ci < len(lv):
+                lv[ci]["filled"] = False
+        unreal = pos * (close - (cost / pos)) if pos > 0 else 0.0
+        cur = equity + unreal
+        hwm = max(hwm, cur)
+        dd = (hwm - cur) / hwm * 100 if hwm > 0 else 0
+        maxdd = max(maxdd, dd)
+        curve.append({"t": int(ts), "v": round(cur, 2)})
+
+    net = gp - gl - fees
+    days = max(1.0, (candles[-1][0] - candles[0][0]) / 86_400_000)
+    return {
+        "net_profit": round(net, 2),
+        "gross_profit": round(gp, 2),
+        "fees": round(fees, 2),
+        "roi_pct": round(net / capital * 100, 2) if capital else 0,
+        "round_trips": trips,
+        "avg_per_trip": round(net / trips, 4) if trips else 0,
+        "max_drawdown_pct": round(maxdd, 2),
+        "profit_factor": round(gp / gl, 2) if gl > 0 else (999.0 if gp > 0 else 0),
+        "days": round(days, 1),
+        "candles": len(candles),
+        "equity_curve": curve[-200:],
+    }
+
+
 async def fetch_price(pair: str, exchange_id: str | None = None) -> float:
     """Live reference price (paper). Uses the given public exchange, else default."""
     eid = exchange_id or GRID_PRICE_EXCHANGE

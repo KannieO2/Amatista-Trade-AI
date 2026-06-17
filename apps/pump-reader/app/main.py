@@ -31,7 +31,7 @@ from . import store
 from .account import real_balances
 from .dashboard import DASHBOARD_HTML
 from .executor import ExecMode, ExecutionEngine, Side, current_mode
-from .grid import GridBot, fetch_price
+from .grid import GridBot, backtest, fetch_ohlcv_for, fetch_price
 from .market import market_for_symbol
 from .notify import format_alert, send_telegram
 from .position_manager import PositionManager
@@ -693,6 +693,29 @@ async def grvt_stop() -> dict:
     _grid.stop()
     await _persist_grid()
     return _grid.stats()
+
+
+class GridBacktestRequest(BaseModel):
+    pair: str = "BTC/USDT"
+    lower: float = Field(gt=0)
+    upper: float = Field(gt=0)
+    levels: int = Field(ge=2, le=200)
+    capital: float = Field(gt=0)
+    timeframe: str = "1h"
+    limit: int = Field(default=168, ge=20, le=1000)
+    fee_pct: float = Field(default=0.1, ge=0, le=1)
+
+
+@app.post("/grvt/backtest")
+async def grvt_backtest(req: GridBacktestRequest) -> dict:
+    """Backtest a grid config over real historical candles before risking it."""
+    if req.upper <= req.lower:
+        raise HTTPException(status_code=400, detail="upper must be > lower")
+    candles = await fetch_ohlcv_for(req.pair, req.timeframe, req.limit)
+    if not candles:
+        raise HTTPException(status_code=400, detail="no historical data for this pair")
+    result = backtest(req.lower, req.upper, req.levels, req.capital, candles, req.fee_pct)
+    return {**result, "pair": req.pair.upper(), "timeframe": req.timeframe}
 
 
 @app.post("/scan", response_model=ScanResponse)
