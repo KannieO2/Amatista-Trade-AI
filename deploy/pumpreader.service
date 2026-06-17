@@ -1,0 +1,15 @@
+[Unit]
+Description=TradeOS AI Pump Reader
+After=network.target
+
+[Service]
+# Paths assume the repo is cloned at /home/ubuntu/tradeos (see oracle-setup.sh).
+WorkingDirectory=/home/ubuntu/tradeos/apps/pump-reader
+EnvironmentFile=/home/ubuntu/tradeos/.env
+ExecStart=/home/ubuntu/tradeos/apps/pump-reader/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+User=ubuntu
+
+[Install]
+WantedBy=multi-user.target

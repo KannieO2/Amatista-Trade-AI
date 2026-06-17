@@ -524,6 +524,28 @@ DASHBOARD_HTML = r"""<!doctype html>
   </div>
 </div>
 
+<div class="modal-overlay hidden" id="bal-modal">
+  <div class="modal" style="width:520px;max-width:94vw">
+    <div class="mh">
+      <div><h3>Balance</h3><p id="bal-sub">—</p></div>
+      <button class="mx" id="bal-close">&times;</button>
+    </div>
+    <div class="mb">
+      <div class="card" style="margin-bottom:14px">
+        <div class="klabel">Total equity</div>
+        <div class="kval" id="bal-total">$0</div>
+        <div class="ksub" id="bal-source">—</div>
+      </div>
+      <div class="navlabel" style="padding:4px 0 8px">Holdings</div>
+      <div id="bal-holdings"><div class="empty">—</div></div>
+    </div>
+    <div class="mfoot">
+      <button class="btn" id="bal-cancel">Close</button>
+      <button class="btn primary" id="bal-alloc">Edit allocation</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const $ = (id) => document.getElementById(id);
 const fmtK = (n) => "$" + (Number(n)/1000).toFixed(1) + "K";
@@ -723,7 +745,29 @@ function syncAlloc(){
 $("r-mexc").addEventListener("input",()=>{ $("r-bitget").value = 100 - Number($("r-mexc").value); syncAlloc(); });
 $("r-bitget").addEventListener("input",()=>{ $("r-mexc").value = 100 - Number($("r-bitget").value); syncAlloc(); });
 $("alloc-total").addEventListener("input", syncAlloc);
-$("btn-balance").addEventListener("click",openAlloc);
+async function openBalance(){
+  $("bal-modal").classList.remove("hidden");
+  $("bal-sub").textContent="loading…"; $("bal-holdings").innerHTML='<div class="empty">loading…</div>';
+  let a; try{ a=await (await fetch("/account")).json(); }catch(e){ $("bal-sub").textContent="error"; return; }
+  $("bal-total").textContent=money(a.total_usdt);
+  const live=a.has_keys;
+  $("bal-source").textContent = live ? `Live account · ${(a.connected||[]).map(upx).join(", ")}` : "Paper balance · no exchange keys set";
+  $("bal-sub").textContent = live ? "Real read-only balance" : "Add read-only spot keys (no withdrawal) to see your real balance";
+  const snaps=a.snapshots||[];
+  let rows="";
+  snaps.forEach(s=>{
+    const vals=s.values_usdt||{};
+    rows+=`<div class="px" style="margin:6px 0 2px;color:var(--muted-2)">${upx(s.exchange)} · ${money(s.total_usdt)}</div>`;
+    rows+=Object.keys(vals).map(k=>`<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:2px 0">
+        <span class="mono">${k}</span><span class="mono px">${(s.balances||{})[k]??""}</span><span class="mono" style="color:var(--green)">${money(vals[k])}</span></div>`).join("");
+  });
+  $("bal-holdings").innerHTML = rows || (live?'<div class="empty">No holdings</div>':`<div class="empty">Paper mode — ${money(a.total_usdt)} virtual. ${a.note||""}</div>`);
+}
+$("btn-balance").addEventListener("click",openBalance);
+$("bal-close").addEventListener("click",()=>$("bal-modal").classList.add("hidden"));
+$("bal-cancel").addEventListener("click",()=>$("bal-modal").classList.add("hidden"));
+$("bal-modal").addEventListener("click",(e)=>{if(e.target.id==="bal-modal")$("bal-modal").classList.add("hidden")});
+$("bal-alloc").addEventListener("click",()=>{$("bal-modal").classList.add("hidden");openAlloc();});
 $("alloc-close").addEventListener("click",()=>$("alloc-modal").classList.add("hidden"));
 $("alloc-cancel").addEventListener("click",()=>$("alloc-modal").classList.add("hidden"));
 $("alloc-modal").addEventListener("click",(e)=>{if(e.target.id==="alloc-modal")$("alloc-modal").classList.add("hidden")});

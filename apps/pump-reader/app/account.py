@@ -37,12 +37,36 @@ async def _balance_for(exchange_id: str) -> dict | None:
 
     totals = bal.get("total") or {}
     holdings = {a: float(v) for a, v in totals.items() if v and float(v) > 0}
-    # USDT-equivalent of stablecoins only (alt valuation would need live tickers).
-    usdt_equiv = sum(v for a, v in holdings.items() if a.upper() in _STABLE_1TO1)
+
+    # Value every asset in USDT: stablecoins 1:1, the rest priced from live
+    # tickers (BASE/USDT). Falls back gracefully if a market is missing.
+    non_stable = [a for a in holdings if a.upper() not in _STABLE_1TO1]
+    tickers: dict = {}
+    if non_stable:
+        symbols = [f"{a}/USDT" for a in non_stable]
+        try:
+            tickers = await client.fetch_tickers(symbols)
+        except Exception:
+            try:
+                tickers = await client.fetch_tickers()
+            except Exception:
+                tickers = {}
+
+    valued: dict[str, float] = {}
+    for asset, amount in holdings.items():
+        if asset.upper() in _STABLE_1TO1:
+            valued[asset] = amount
+        else:
+            tk = tickers.get(f"{asset}/USDT") or {}
+            px = float(tk.get("last") or tk.get("close") or 0.0)
+            valued[asset] = amount * px
+    usdt_equiv = sum(valued.values())
+    top = sorted(valued.items(), key=lambda x: -x[1])[:25]
     return {
         "exchange": exchange_id,
         "total_usdt": round(usdt_equiv, 2),
-        "balances": {a: round(v, 8) for a, v in sorted(holdings.items(), key=lambda x: -x[1])[:25]},
+        "balances": {a: round(holdings[a], 8) for a, _ in top},
+        "values_usdt": {a: round(v, 2) for a, v in top if v > 0},
     }
 
 
