@@ -87,7 +87,37 @@ DASHBOARD_HTML = r"""<!doctype html>
   .grid-2{display:grid;grid-template-columns:1fr 1.32fr;gap:14px}
   .grid-2b{display:grid;grid-template-columns:1.5fr 1fr;gap:14px}
   @media(max-width:1100px){.grid-kpi{grid-template-columns:repeat(2,1fr)}.grid-2,.grid-2b{grid-template-columns:1fr}}
-  @media(max-width:760px){.app{grid-template-columns:1fr}.view{padding:14px 14px}.grid-kpi{grid-template-columns:1fr 1fr}.vhead{flex-direction:column;gap:6px}}
+  /* ---- mobile / phone (matches the responsive grid bot) ---- */
+  @media(max-width:860px){
+    .app{grid-template-columns:1fr}
+    /* sidebar becomes a sticky horizontal nav strip */
+    .sidebar{flex-direction:row;align-items:center;gap:8px;padding:8px 10px;border-right:0;border-bottom:1px solid var(--border-soft);overflow-x:auto;position:sticky;top:0;z-index:30;-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px)}
+    .sidebar .navlabel{display:none}
+    .sidebar .brand{flex:0 0 auto;margin:0}
+    .nav{flex-direction:row;gap:4px;flex:1;overflow-x:auto;scrollbar-width:none}
+    .nav::-webkit-scrollbar{display:none}
+    .nav a{white-space:nowrap;padding:8px 11px;font-size:12px}
+    .topbar{flex-wrap:wrap;gap:8px;padding:9px 12px}
+    .search{display:none}
+    .tb-actions{flex-wrap:wrap;gap:6px;margin-left:auto}
+    .view{padding:12px}
+    .grid-kpi{grid-template-columns:1fr 1fr;gap:10px}
+    .vhead{flex-direction:column;align-items:flex-start;gap:6px}
+    .vhead h1{font-size:18px}
+    table{font-size:11.5px}
+    .modal{width:100%!important;max-width:100vw;border-radius:14px 14px 0 0;max-height:88vh}
+    .modal-overlay{align-items:flex-end}
+  }
+  @media(max-width:480px){
+    body{font-size:12.5px}
+    .grid-kpi{grid-template-columns:1fr}
+    .sidebar .brand b+span,.sidebar .brand span{display:none}
+    .nav a svg{width:14px;height:14px}
+    .pill{padding:6px 9px;font-size:11px}
+    .modeswitch button{padding:7px 10px;font-size:11px}
+    .modeswitch button svg{display:none}
+    .vhead h1{font-size:17px}
+  }
   body{overflow-x:hidden}
   /* wide tables scroll inside their panel instead of breaking the page */
   .panel{overflow-x:auto}

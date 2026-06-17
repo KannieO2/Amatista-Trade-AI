@@ -640,7 +640,7 @@ async def _perform_scan(min_pump_score: int = 1) -> ScanResponse:
     except Exception:
         logger.exception("velocity sync failed")
     # Mark equity (real account total when keys exist, else paper balance).
-    equity_v = _real_account["total_usdt"] if _real_account.get("has_keys") else PAPER_BALANCE
+    equity_v = _real_account["total_usdt"] if _real_account.get("has_keys") else _paper_equity()
     point = {"t": _last_scan_at.isoformat(), "v": equity_v}
     _equity_history.append(point)
     del _equity_history[:-200]
@@ -681,7 +681,8 @@ async def account() -> dict:
             await store.insert_account_snapshot(snap)
         return {**acct, "source": "live_account"}
     return {
-        "has_keys": False, "source": "paper", "total_usdt": PAPER_BALANCE,
+        "has_keys": False, "source": "paper", "total_usdt": _paper_equity(),
+        "allocated_usdt": float(_allocation.get("bot_total_usdt") or PAPER_BALANCE),
         "connected": [], "snapshots": [],
         "note": "No exchange keys set. Add read-only spot keys (no withdrawal) to env to show your real balance.",
     }
@@ -747,6 +748,19 @@ def _pnl_7d() -> float:
     return round(realized + unrealized, 2)
 
 
+def _paper_equity() -> float:
+    """Paper balance = capital you allocated (bot total) + demo gains. Driven by
+    the allocation modal, so adding capital updates the balance immediately."""
+    base = float(_allocation.get("bot_total_usdt") or PAPER_BALANCE)
+    realized = sum(e.pnl for e in _pm.history)
+    unrealized = sum(
+        (p.last_price - p.entry_price) * p.qty
+        for p in _pm.positions.values()
+        if not p.closed and p.last_price > 0
+    )
+    return round(base + realized + unrealized, 2)
+
+
 @app.get("/overview")
 async def overview() -> dict:
     ranked = sorted(_candidates.values(), key=lambda c: c.pump_score, reverse=True)
@@ -774,7 +788,7 @@ async def overview() -> dict:
             "long_pump": _cluster_stats("long_pump"),
         },
         "open_positions": len(_engine.positions),
-        "balance": _real_account["total_usdt"] if _real_account.get("has_keys") else PAPER_BALANCE,
+        "balance": _real_account["total_usdt"] if _real_account.get("has_keys") else _paper_equity(),
         "balance_source": "live_account" if _real_account.get("has_keys") else "paper",
         "account_connected": _real_account.get("connected", []),
         "persistence": "supabase" if store.enabled() else "memory",
