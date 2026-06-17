@@ -614,6 +614,9 @@ async def set_allocation(req: AllocationRequest) -> dict:
         raise HTTPException(status_code=400, detail=f"splits must sum to 100% (got {total_pct}%)")
     _allocation["bot_total_usdt"] = req.bot_total_usdt
     _allocation["splits"] = {k.lower(): float(v) for k, v in req.splits.items()}
+    await store.upsert_allocation({
+        "bot_total_usdt": _allocation["bot_total_usdt"], "splits": _allocation["splits"],
+    })
     return {**_allocation, "sum_pct": total_pct, "valid": True}
 
 
@@ -623,6 +626,15 @@ class GridConfigRequest(BaseModel):
     upper: float = Field(gt=0)
     levels: int = Field(ge=2, le=200)
     capital: float = Field(gt=0)
+
+
+async def _persist_grid() -> None:
+    await store.upsert_grid({
+        "pair": _grid.pair, "lower_price": _grid.lower, "upper_price": _grid.upper,
+        "levels": _grid.levels, "capital": _grid.capital, "cash": _grid.cash,
+        "position": _grid.position, "realized": _grid.realized, "last_price": _grid.last_price,
+        "running": _grid.running, "grid": _grid.grid, "held": _grid.held, "qty": _grid.qty,
+    })
 
 
 @app.get("/grvt/status")
@@ -636,6 +648,7 @@ async def grvt_config(req: GridConfigRequest) -> dict:
         _grid.configure(req.pair, req.lower, req.upper, req.levels, req.capital)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    await _persist_grid()
     return _grid.stats()
 
 
@@ -649,12 +662,14 @@ async def grvt_start() -> dict:
     price = await fetch_price(_grid.pair)
     if price > 0:
         _grid.step(price)
+    await _persist_grid()
     return _grid.stats()
 
 
 @app.post("/grvt/stop")
 async def grvt_stop() -> dict:
     _grid.stop()
+    await _persist_grid()
     return _grid.stats()
 
 
