@@ -1,0 +1,13 @@
+{
+  "name": "tradeos-ai",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/dashboard",
+    "packages/shared-types"
+  ],
+  "scripts": {
+    "dashboard:dev": "npm --workspace @tradeos/dashboard run dev",
+    "dashboard:build": "npm --workspace @tradeos/dashboard run build"
+  }
+}

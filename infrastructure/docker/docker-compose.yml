@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tradeos_ai}
+      POSTGRES_USER: ${POSTGRES_USER:-tradeos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tradeos_dev_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ../postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  dashboard:
+    build:
+      context: ../../apps/dashboard
+    environment:
+      NEXT_PUBLIC_PUMP_READER_API_URL: http://localhost:8001
+      NEXT_PUBLIC_RISK_ENGINE_API_URL: http://localhost:8002
+    ports:
+      - "3000:3000"
+    depends_on:
+      - pump-reader
+      - risk-engine
+
+  pump-reader:
+    build:
+      context: ../../apps/pump-reader
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://tradeos:tradeos_dev_password@postgres:5432/tradeos_ai}
+      RISK_ENGINE_URL: http://risk-engine:8000
+    ports:
+      - "8001:8000"
+    depends_on:
+      - postgres
+      - risk-engine
+
+  risk-engine:
+    build:
+      context: ../../services/risk-engine
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://tradeos:tradeos_dev_password@postgres:5432/tradeos_ai}
+    ports:
+      - "8002:8000"
+    depends_on:
+      - postgres
+
+  exchange-hub:
+    build:
+      context: ../../services/exchange-hub
+    environment:
+      RISK_ENGINE_URL: http://risk-engine:8000
+    ports:
+      - "8003:8000"
+    depends_on:
+      - risk-engine
+
+  notification-engine:
+    build:
+      context: ../../services/notification-engine
+    ports:
+      - "8004:8000"
+
+  learning-engine:
+    build:
+      context: ../../services/learning-engine
+    ports:
+      - "8005:8000"
+    depends_on:
+      - postgres
+
+volumes:
+  postgres-data:
+
