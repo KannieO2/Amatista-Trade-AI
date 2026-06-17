@@ -38,6 +38,7 @@ from .position_manager import PositionManager
 from .risk import RiskGuard
 from .scanner import ScannedCandidate, fetch_token_detail, scan_markets
 from .velocity import VelocityWatcher, watch_list_from_scores
+from .learning import LearningLab
 
 logger = logging.getLogger("pump-reader")
 
@@ -143,6 +144,10 @@ _grid = GridBot()
 # Real-time volume-acceleration entry trigger (fires between slow scans).
 _velocity = VelocityWatcher()
 
+# Learning lab: tracks whether alerts fired BEFORE the pump (MFE/MAE, lead time,
+# precision/recall) and proposes threshold tweaks once outcomes settle.
+_lab = LearningLab()
+
 # Cached real account balance (only populated when the user's read-only keys are
 # set). Until then the dashboard shows the paper balance.
 _real_account: dict = {"has_keys": False, "total_usdt": 0.0, "connected": [], "snapshots": []}
@@ -204,6 +209,13 @@ async def _monitor_loop() -> None:
                     continue
                 for event in _pm.step(key, price):
                     await _handle_exit(pos, event)
+            # Learning lab: track each alerted token's MFE/MAE/lead time vs live
+            # price so we can tell whether alerts fire BEFORE the pump.
+            for exch, sym in _lab.active_symbols():
+                price = await fetch_price(sym, exch)
+                if price > 0:
+                    _lab.step(exch, sym, price)
+            _lab.settle_due()
         except Exception:
             logger.exception("monitor loop failed")
         await asyncio.sleep(GRID_TICK_SECONDS)
@@ -427,6 +439,16 @@ async def _perform_scan(min_pump_score: int = 1) -> ScanResponse:
                 "PUMP_SCANNER", "INFO",
                 f"Alert {candidate.symbol} ({candidate.exchange.upper()}) score {candidate.pump_score} · {candidate.classification}",
                 volumen=candidate.volume_spike,
+            )
+            _lab.record_alert(
+                symbol=candidate.symbol, exchange=candidate.exchange, alert_price=candidate.last_price,
+                pump_score=candidate.pump_score, cluster=candidate.cluster, classification=candidate.classification,
+                signals={
+                    "volume_spike": candidate.volume_spike,
+                    "price_change_pct_24h": candidate.price_change_pct_24h,
+                    "orderbook_imbalance": candidate.orderbook_imbalance,
+                    "liquidity_usd": candidate.liquidity_usd,
+                },
             )
             if AUTO_ENTRY and current_mode() == ExecMode.paper and not _pm.has(candidate.exchange, candidate.symbol):
                 await _auto_enter(candidate)
@@ -804,9 +826,27 @@ async def update_settings(req: SettingsRequest) -> dict:
     return _settings_payload()
 
 
-@app.get("/learning", response_model=list[LearningRecord])
+@app.get("/learning")
+async def learning_snapshot() -> dict:
+    """Feedback-loop analytics: did alerts fire before the pump, precision/recall,
+    lead time, component contributions, and threshold proposals."""
+    return _lab.snapshot()
+
+
+@app.get("/learning/ledger", response_model=list[LearningRecord])
 async def list_learning() -> list[LearningRecord]:
     return _learning
+
+
+class MissedPumpRequest(BaseModel):
+    symbol: str
+    exchange: str = "n/a"
+
+
+@app.post("/learning/missed")
+async def report_missed(req: MissedPumpRequest) -> dict:
+    """User reports a pump the bot did NOT alert (lowers recall)."""
+    return _lab.record_missed(req.symbol, req.exchange)
 
 
 @app.post("/risk/kill-switch")

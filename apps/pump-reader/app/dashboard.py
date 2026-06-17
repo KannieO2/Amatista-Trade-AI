@@ -391,11 +391,28 @@ DASHBOARD_HTML = r"""<!doctype html>
 
     <!-- ============ LEARNING VIEW ============ -->
     <section class="view hidden" id="view-learning">
-      <div class="vhead"><div><h1>Learning</h1><p>Signal &rarr; action &rarr; result ledger · feeds threshold tuning</p></div><div class="ts mono" id="le-ts">—</div></div>
+      <div class="vhead"><div><h1>Learning</h1><p id="lrn-sub">Feedback loop · did alerts fire before the pump?</p></div><div class="ts mono" id="le-ts">—</div></div>
+      <div class="grid-kpi">
+        <div class="card"><div class="klabel">Precision · 30d</div><div class="kval" id="lrn-prec">—</div><div class="ksub" id="lrn-prec-sub">alerts that pumped</div></div>
+        <div class="card"><div class="klabel">Recall (est.)</div><div class="kval" id="lrn-rec">—</div><div class="ksub" id="lrn-rec-sub">pumps caught</div></div>
+        <div class="card"><div class="klabel">Avg lead time</div><div class="kval" id="lrn-lead">—</div><div class="ksub">alert &rarr; peak</div></div>
+        <div class="card"><div class="klabel">Pending proposals</div><div class="kval" id="lrn-prop-n">0</div><div class="ksub" id="lrn-prop-sub">threshold tweaks</div></div>
+      </div>
       <div class="panel">
-        <div class="phead"><span class="pt">Event ledger</span><span class="px" id="le-count">0</span></div>
-        <table><thead><tr><th>Time</th><th>Token</th><th>Action</th><th>Mode</th><th>Score</th><th>Class</th><th>Detail</th></tr></thead>
-        <tbody id="le-body"><tr><td colspan="7" class="empty">No learning events yet</td></tr></tbody></table>
+        <div class="phead"><span class="pt">Pending proposals</span><span class="px" id="lrn-prop-c">0</span></div>
+        <div id="lrn-proposals"><div class="empty">The analyzer needs settled outcomes (7-day horizon) before it recommends changes. Detection-only learning starts ~7 days after deploy.</div></div>
+      </div>
+      <div class="grid-2" style="grid-template-columns:1fr 1fr">
+        <div class="panel"><div class="phead"><span class="pt">Component contributions · classic</span><span class="px">lift ≥ outcome</span></div><div id="lrn-comp-classic"><div class="empty">—</div></div></div>
+        <div class="panel"><div class="phead"><span class="pt">Component contributions · long_pump</span><span class="px">lift ≥ outcome</span></div><div id="lrn-comp-long"><div class="empty">—</div></div></div>
+      </div>
+      <div class="panel">
+        <div class="phead"><span class="pt">Outcomes</span>
+          <span style="display:flex;gap:6px"><input id="lrn-missed" placeholder="symbol e.g. BSB" style="background:var(--panel-2);border:1px solid var(--border);border-radius:7px;color:var(--text);padding:5px 9px;font-size:12px;width:140px" /><button class="btn" id="lrn-missed-btn">Report missed pump</button></span>
+        </div>
+        <div class="px" style="margin:-6px 0 10px">Tracks max favorable/adverse excursion (MFE/MAE) and lead time for up to 30 days.</div>
+        <table><thead><tr><th>Token</th><th>Cluster</th><th>Score</th><th>Label</th><th>MFE 24h</th><th>MFE 7d</th><th>MAE 7d</th><th>Lead</th></tr></thead>
+        <tbody id="lrn-body"><tr><td colspan="8" class="empty">No outcomes yet — alerts become outcomes the moment they fire</td></tr></tbody></table>
       </div>
     </section>
 
@@ -831,14 +848,49 @@ async function loadAlerts(){
       <span class="ago mono">${tcase(a.classification)}</span></div>`).join("")
     : `<div class="empty">No candidates above the confirmation threshold right now</div>`;
 }
+function leadFmt(secs){ if(secs==null) return "—"; const m=secs/60; if(m<60) return Math.round(m)+"m"; if(m<1440) return (m/60).toFixed(1)+"h"; return (m/1440).toFixed(1)+"d"; }
+function pctCell(v){ if(v==null) return '<td class="px">—</td>'; const up=v>=0; return `<td class="mono delta ${up?'up':'down'}">${up?'+':''}${v}%</td>`; }
+function labelPill(lab){ const m={confirmed_pump:["#15301f","#7CFFB2"],no_pump:["#2a1414","#ff8a8a"],pending:["var(--inset)","var(--muted)"],missed:["#33240a","#f6c177"]}; const c=m[lab]||m.pending; return `<span class="badge" style="background:${c[0]};color:${c[1]}">${tcase(lab)}</span>`; }
+function compHtml(c){
+  if(!c) return '<div class="empty">—</div>';
+  if(!c.ready) return `<div class="empty">Not enough samples yet (have ${c.have||0}, need ${c.need}).</div>`;
+  return (c.contrib||[]).map(x=>{ const up=x.lift>=0; return `<div style="display:flex;align-items:center;gap:10px;margin:7px 0">
+    <span style="width:150px;font-size:12px;color:var(--muted-2)">${tcase(x.signal)}</span>
+    <div style="flex:1;height:6px;border-radius:4px;background:var(--inset);overflow:hidden"><i style="display:block;height:100%;width:${Math.min(Math.abs(x.lift)*100,100)}%;background:${up?'var(--green)':'var(--red)'}"></i></div>
+    <span class="mono" style="width:60px;text-align:right;color:${up?'var(--green)':'var(--red)'}">${up?'+':''}${x.lift}</span></div>`; }).join("") || '<div class="empty">—</div>';
+}
 async function loadLearning(){
-  let l; try{ l=await (await fetch("/learning")).json(); }catch(e){ return; }
-  $("le-ts").textContent=new Date().toLocaleTimeString(); $("le-count").textContent=l.length+" events";
-  $("le-body").innerHTML = l.length ? l.slice().reverse().map(e=>`
-    <tr><td class="mono px">${new Date(e.created_at).toLocaleTimeString()}</td><td class="sym">${e.symbol}</td>
-    <td class="px">${e.action}</td><td class="mono">${e.mode}</td><td>${scoreBadge(e.pump_score)}</td>
-    <td class="px">${tcase(e.classification)}</td><td class="px">${e.detail}</td></tr>`).join("")
-    : `<tr><td colspan="7" class="empty">No learning events yet · act on a candidate to record one</td></tr>`;
+  let d; try{ d=await (await fetch("/learning")).json(); }catch(e){ return; }
+  $("le-ts").textContent=new Date().toLocaleTimeString();
+  $("lrn-sub").textContent=`Feedback loop · ${d.window_days}d window · ${d.n_alerts} alerts · ${d.n_settled} settled outcomes`;
+  $("lrn-prec").textContent = d.precision==null?"—":Math.round(d.precision*100)+"%";
+  $("lrn-prec-sub").textContent = `${d.n_settled} alerts evaluated`;
+  $("lrn-rec").textContent = d.recall==null?"—":Math.round(d.recall*100)+"%";
+  $("lrn-rec-sub").textContent = `${d.n_missed} missed reported`;
+  $("lrn-lead").textContent = leadFmt(d.avg_lead_secs);
+  const props=d.proposals||[];
+  $("lrn-prop-n").textContent=props.length; $("lrn-prop-c").textContent=props.length;
+  $("lrn-prop-sub").textContent = props.length?"action suggested":"needs settled outcomes (7d)";
+  $("lrn-proposals").innerHTML = props.length
+    ? props.map(p=>`<div class="alert"><span class="badge" style="background:#1a2030">${tcase(p.kind)}</span><div class="meta"><div class="sub" style="color:var(--text)">${p.text}</div></div></div>`).join("")
+    : `<div class="empty">The analyzer needs settled outcomes (7-day horizon) before it recommends changes. Detection-only learning starts ~7 days after deploy.</div>`;
+  $("lrn-comp-classic").innerHTML=compHtml((d.components||{}).classic);
+  $("lrn-comp-long").innerHTML=compHtml((d.components||{}).long_pump);
+  const t=d.table||[];
+  $("lrn-body").innerHTML = t.length ? t.map(r=>`
+    <tr><td class="sym">${r.symbol} <span class="px">${upx(r.exchange)}</span></td>
+    <td><span class="tag"><span class="cdot" style="background:${clusterColor(r.cluster)}"></span>${tcase(r.cluster)}</span></td>
+    <td>${r.source==='missed'?'<span class="px">—</span>':scoreBadge(r.pump_score)}</td>
+    <td>${labelPill(r.label)}</td>${pctCell(r.mfe_24h)}${pctCell(r.mfe_7d)}${pctCell(r.mae_7d)}
+    <td class="mono px">${r.lead_mins==null?'—':leadFmt(r.lead_mins*60)}</td></tr>`).join("")
+    : `<tr><td colspan="8" class="empty">No outcomes yet — alerts become outcomes the moment they fire</td></tr>`;
+}
+async function reportMissed(){
+  const s=$("lrn-missed").value.trim(); if(!s) return;
+  $("lrn-missed-btn").textContent="…";
+  try{ await fetch("/learning/missed",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol:s})}); $("lrn-missed").value=""; $("lrn-missed-btn").textContent="Reported ✓"; loadLearning(); }
+  catch(e){ $("lrn-missed-btn").textContent="Error"; }
+  setTimeout(()=>{$("lrn-missed-btn").textContent="Report missed pump";},1500);
 }
 async function loadTrades(){
   let p, m; try{ p=await (await fetch("/positions")).json(); m=await (await fetch("/managed")).json(); }catch(e){ return; }
@@ -911,6 +963,8 @@ $("set-kill-on").addEventListener("click",()=>killSwitch(true));
 $("set-kill-off").addEventListener("click",()=>killSwitch(false));
 $("set-alloc-btn").addEventListener("click",openAlloc);
 $("cfg-save").addEventListener("click",saveConfig);
+$("lrn-missed-btn").addEventListener("click",reportMissed);
+$("lrn-missed").addEventListener("keydown",(e)=>{if(e.key==="Enter")reportMissed();});
 
 // ---- candidate detail modal ----
 function ringSvg(score, color){
