@@ -55,6 +55,8 @@ DASHBOARD_HTML = r"""<!doctype html>
   .nav a.active svg{opacity:1;color:var(--pink)}
   .nav a .badge{margin-left:auto;font-size:9px;background:var(--inset);color:var(--muted);padding:1px 6px;border-radius:5px}
   .badge{display:inline-block;font-size:11px;padding:3px 8px;border-radius:6px;background:var(--inset);color:var(--muted-2);font-weight:600}
+  .stat{font-size:11px;white-space:nowrap}
+  .stat.sw{color:var(--pink);font-weight:600}
 
   /* topbar */
   .main{display:flex;flex-direction:column;min-width:0}
@@ -373,8 +375,8 @@ DASHBOARD_HTML = r"""<!doctype html>
       </div>
       <div class="panel">
         <div class="phead"><span class="pt">All candidates</span><span class="px" id="tok-count">0</span></div>
-        <table><thead><tr><th>Score</th><th>Conf</th><th>Token</th><th>Exch</th><th>Cluster</th><th>Class</th><th>&Delta;24h</th><th>Vol&times;</th><th>Liquidity</th><th>Flags</th><th>Status</th><th></th></tr></thead>
-        <tbody id="tok-body"><tr><td colspan="12" class="empty">Loading…</td></tr></tbody></table>
+        <table><thead><tr><th>Score</th><th>Conf</th><th>Token</th><th>Exch</th><th>Cluster</th><th>Class</th><th>&Delta;24h</th><th>Vol&times;</th><th>Liquidity</th><th>Status</th><th></th></tr></thead>
+        <tbody id="tok-body"><tr><td colspan="11" class="empty">Loading…</td></tr></tbody></table>
       </div>
     </section>
 
@@ -747,10 +749,10 @@ async function loadTokens(){
       <td><span class="tag"><span class="cdot" style="background:${clusterColor(t.cluster)}"></span>${tcase(t.cluster)}</span></td>
       <td class="px">${tcase(t.classification)}</td>
       <td class="mono delta ${up?'up':'down'}">${up?'+':''}${t.price_change_pct_24h}%</td>
-      <td class="mono">${t.volume_spike}x</td><td class="mono">${money(t.liquidity_usd)}</td>
-      <td class="px">${(t.flags||[]).map(tcase).join(", ")||"—"}</td><td class="px">${tcase(t.status)}</td>
+      <td class="mono">${t.volume_spike}x</td><td class="mono">${moneyC(t.liquidity_usd)}</td>
+      <td class="px"><span class="stat ${t.status==='waiting_confirmation'?'sw':''}">${tcase(t.status)}</span></td>
       <td><button class="btn" style="padding:4px 10px" onclick="event.stopPropagation();actToken('${t.symbol}','${t.exchange}',this)">Act</button></td></tr>`;
-  }).join("") : `<tr><td colspan="12" class="empty">No candidates yet · run Update on Overview</td></tr>`;
+  }).join("") : `<tr><td colspan="11" class="empty">No candidates yet · run Update on Overview</td></tr>`;
   loadVelocity();
 }
 async function loadVelocity(){
