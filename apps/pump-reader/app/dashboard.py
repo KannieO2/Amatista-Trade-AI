@@ -208,7 +208,9 @@ DASHBOARD_HTML = r"""<!doctype html>
   .app.grid-mode .search{display:none}
   #tb-pump-only{display:inline-flex;align-items:center;gap:8px}
   .app.grid-mode #tb-pump-only{display:none}
-  #view-grvt{padding:14px 18px 18px}
+  /* grid mode = full-bleed iframe, no chrome, fills under the top bar */
+  #view-grvt{padding:0;gap:0;flex:1;min-height:0}
+  #grvt-frame{width:100%;flex:1;min-height:0;border:0;display:block;background:#0b0e14}
 </style>
 </head>
 <body>
@@ -320,21 +322,10 @@ DASHBOARD_HTML = r"""<!doctype html>
       </div>
     </section>
 
-    <!-- ============ GRVT VIEW ============ -->
+    <!-- ============ GRVT VIEW (full-bleed embed) ============ -->
     <section class="view hidden" id="view-grvt">
-      <div class="vhead">
-        <div>
-          <h1>GRVTBot · Grid Trading</h1>
-          <p>The real GRVTBot, embedded in this same app — grid bot for GRVT perpetual futures (mock mode until you add GRVT keys)</p>
-        </div>
-        <div><a class="btn" href="/grid/dashboard/" target="_blank" rel="noopener">Open Full Screen ↗</a></div>
-      </div>
-
-      <div class="panel" style="padding:0;overflow:hidden">
-        <iframe id="grvt-frame" title="GRVTBot"
-          style="width:100%;height:calc(100vh - 150px);min-height:640px;border:0;border-radius:14px;background:#0b0e14;display:block"></iframe>
-      </div>
-      <div class="empty" id="grvt-offline" style="display:none;text-align:left;padding:14px 2px 0">
+      <iframe id="grvt-frame" title="GRVTBot"></iframe>
+      <div class="empty" id="grvt-offline" style="display:none;text-align:left;padding:14px 18px">
         GRVTBot no responde. Inicia el proceso Node: ejecuta <b>start-grvtbot.bat</b> y recarga la página.
       </div>
     </section>
@@ -674,16 +665,16 @@ async function loadGrvt(){
   try{
     const r=await fetch("/grid/api/health",{cache:"no-store"});
     if(!r.ok) throw 0;
-    // Single sign-on: the TradeOS login is the only login. We mint a GRVT
-    // session on the backend (owner creds never touch the browser) and stash
-    // the JWT where the embedded SPA reads it (same-origin localStorage), so
-    // the iframe boots already authenticated instead of showing its own login.
-    try{
-      const s=await fetch("/grid-sso",{cache:"no-store"});
-      if(s.ok){ const j=await s.json(); if(j.ok && j.token) localStorage.setItem(j.key||"grvt-grid-token", j.token); }
-    }catch(_){}
+    // Single sign-on: the TradeOS login is the ONLY login. Mint a GRVT session
+    // on the backend (owner creds never touch the browser) and stash the JWT
+    // where the embedded SPA reads it (same-origin localStorage). We store the
+    // token FIRST, then (re)load the iframe with a cache-buster so the SPA always
+    // boots fresh with the token present — no GRVT login ever shows.
+    const s=await fetch("/grid-sso",{cache:"no-store"});
+    const j=await s.json().catch(()=>null);
+    if(j && j.ok && j.token){ localStorage.setItem(j.key||"grvt-grid-token", j.token); }
     if(off) off.style.display="none";
-    if(fr){ fr.style.display="block"; if(!fr.getAttribute("src")) fr.setAttribute("src","/grid/dashboard/"); }
+    if(fr){ fr.style.display="block"; fr.src="/grid/dashboard/?sso="+Date.now(); }
   }catch(e){
     if(off) off.style.display="block";
     if(fr) fr.style.display="none";

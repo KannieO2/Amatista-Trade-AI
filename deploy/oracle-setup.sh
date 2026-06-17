@@ -91,6 +91,10 @@ OWNER_INITIAL_PASSWORD=$GRID_OWNER_PASSWORD
 MASTER_KEY_PATH=$GRVT_DIR/master.key
 DASHBOARD_V2_DIST=$GRVT_DIR/packages/dashboard/dist
 GRVT_TRADING_ACCOUNT_ID=mock-account
+GRVT_ACCOUNT_ID=mock-account
+GRVT_API_KEY=mock-key
+GRVT_API_SECRET=mock-secret
+GRVT_TRADING_ADDRESS=0x0000000000000000000000000000000000000000
 ENV
   echo "    Created $GENV in MOCK mode. For real GRVT money: set your GRVT keys"
   echo "    and remove MOCK_MODE / DRY_RUN."
