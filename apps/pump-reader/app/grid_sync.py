@@ -20,13 +20,38 @@ from datetime import UTC, datetime
 
 import httpx
 
-from . import store
+from . import notify, store
 
 logger = logging.getLogger("pump-reader.grid-sync")
 
 GRID_BACKEND = "http://127.0.0.1:3848"
 OWNER_EMAIL = os.getenv("GRID_OWNER_EMAIL", "admin@tradeos.local")
 OWNER_PASSWORD = os.getenv("GRID_OWNER_PASSWORD", "")
+# Alert on the Telegram channel when grid PnL moves at least this much (USD).
+GRID_PNL_ALERT_USD = float(os.getenv("GRID_PNL_ALERT_USD", "5"))
+_last_grid: dict = {}
+
+
+async def _grid_alerts(summary: dict, equity: float) -> None:
+    """Telegram alert on meaningful grid changes (bot count/status, PnL swings)."""
+    global _last_grid
+    botc = int(summary.get("botCount") or 0)
+    running = int(summary.get("runningCount") or 0)
+    pnl = float(summary.get("totalPnl") or 0)
+    prev = _last_grid
+    _last_grid = {"botCount": botc, "runningCount": running, "totalPnl": pnl}
+    if not prev:
+        return  # first sync = baseline only
+    msgs: list[str] = []
+    if botc != prev["botCount"]:
+        msgs.append(f"Bots: {prev['botCount']} → {botc}")
+    if running != prev["runningCount"]:
+        msgs.append(f"Corriendo: {prev['runningCount']} → {running}")
+    dpnl = pnl - prev["totalPnl"]
+    if abs(dpnl) >= GRID_PNL_ALERT_USD:
+        msgs.append(f"{'🟢' if dpnl >= 0 else '🔴'} PnL {dpnl:+.2f} (total {pnl:+.2f})")
+    if msgs:
+        await notify.send_grid(" · ".join(msgs) + f"\nEquity ${equity:,.2f}")
 
 _token: str | None = None
 _client: httpx.AsyncClient | None = None
@@ -149,4 +174,5 @@ async def sync_once() -> bool:
             "balances": summary,
             "at": now,
         })
+    await _grid_alerts(summary, equity)
     return True

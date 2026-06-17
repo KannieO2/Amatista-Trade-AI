@@ -6,8 +6,10 @@ live from the Settings UI (/telegram/config), which also persists them to .env.
 
 from __future__ import annotations
 
+import html
 import logging
 import os
+import time
 from pathlib import Path
 
 import httpx
@@ -123,6 +125,38 @@ async def send_test() -> bool:
     return await send_telegram(
         "✅ <b>TradeOS AI</b> conectado a este grupo. Aquí recibirás las alertas de pump en tiempo real."
     )
+
+
+# --- system / error / grid alerts (distinct headers so they stand out) --------
+
+ERROR_THROTTLE_S = int(os.getenv("PUMP_ERROR_THROTTLE_S", "600"))  # same error max 1×/10min
+_last_error_at: dict[str, float] = {}
+
+
+async def send_system(text: str) -> bool:
+    return await send_telegram(f"⚙️ <b>TradeOS AI · Sistema</b>\n{text}")
+
+
+async def send_error(where: str, detail: str) -> bool:
+    """Big, unmistakable error alert. Throttled per (where+detail) so a looping
+    failure doesn't flood the chat."""
+    key = f"{where}:{detail[:80]}"
+    now = time.time()
+    if now - _last_error_at.get(key, 0.0) < ERROR_THROTTLE_S:
+        return False
+    _last_error_at[key] = now
+    body = html.escape(detail[:500])
+    text = (
+        "🟥🟥🟥  <b>ERROR · TradeOS AI</b>  🟥🟥🟥\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"📍 <b>{html.escape(where)}</b>\n"
+        f"<code>{body}</code>"
+    )
+    return await send_telegram(text)
+
+
+async def send_grid(text: str) -> bool:
+    return await send_telegram(f"📊 <b>Grid Bot</b>\n{text}")
 
 
 def format_alert(symbol: str, pump_score: int, classification: str, flags: list[str]) -> str:

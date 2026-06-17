@@ -179,9 +179,17 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_grid_sync_loop()),
         asyncio.create_task(_daily_discover_loop()),
     ]
+    asyncio.create_task(notify.send_system(
+        f"🟢 <b>Bot iniciado</b> · modo {os.getenv('PUMP_EXEC_MODE', 'paper')} · "
+        f"escaneando {', '.join(_scan_exchanges())}"
+    ))
     try:
         yield
     finally:
+        try:
+            await notify.send_system("🔴 <b>Bot detenido</b>")
+        except Exception:
+            pass
         for task in tasks:
             task.cancel()
         await _velocity.close()
@@ -195,8 +203,9 @@ async def _auto_scan_loop() -> None:
         try:
             await _perform_scan()
             logger.info("auto-scan done: %d candidates", len(_candidates))
-        except Exception:
+        except Exception as exc:
             logger.exception("auto-scan failed")
+            await notify.send_error("Scan loop", repr(exc))
         await asyncio.sleep(SCAN_INTERVAL_SECONDS)
 
 
@@ -208,8 +217,9 @@ async def _grid_tick_loop() -> None:
                 price = await fetch_price(_grid.pair)
                 if price > 0:
                     _grid.step(price)
-        except Exception:
+        except Exception as exc:
             logger.exception("grid tick failed")
+            await notify.send_error("Grid tick", repr(exc))
         await asyncio.sleep(GRID_TICK_SECONDS)
 
 
@@ -230,8 +240,9 @@ async def _daily_discover_loop() -> None:
             logger.info(msg)
             if store.enabled():
                 await store.insert_bot_log("PUMP_SCANNER", "INFO", msg)
-        except Exception:
+        except Exception as exc:
             logger.exception("daily discover failed")
+            await notify.send_error("Daily discover", repr(exc))
         await asyncio.sleep(86400)
 
 
@@ -242,8 +253,9 @@ async def _grid_sync_loop() -> None:
     while True:
         try:
             await grid_sync.sync_once()
-        except Exception:
+        except Exception as exc:
             logger.exception("grid sync failed")
+            await notify.send_error("Grid sync", repr(exc))
         await asyncio.sleep(GRID_SYNC_SECONDS)
 
 
@@ -266,8 +278,9 @@ async def _monitor_loop() -> None:
                 if price > 0:
                     _lab.step(exch, sym, price)
             _lab.settle_due()
-        except Exception:
+        except Exception as exc:
             logger.exception("monitor loop failed")
+            await notify.send_error("Monitor loop (exits)", repr(exc))
         await asyncio.sleep(GRID_TICK_SECONDS)
 
 
@@ -295,8 +308,9 @@ async def _velocity_loop() -> None:
                     f"⚡ VOLUME SPIKE {t.symbol} ({t.exchange}) accel {t.accel:.1f}x @ {t.price} — entering"
                 )
                 await _auto_enter(candidate)
-        except Exception:
+        except Exception as exc:
             logger.exception("velocity loop failed")
+            await notify.send_error("Velocity loop", repr(exc))
         await asyncio.sleep(VELOCITY_TICK_SECONDS)
 
 
@@ -311,8 +325,9 @@ async def _account_loop() -> None:
                 _real_account = acct
                 for snap in acct.get("snapshots", []):
                     await store.insert_account_snapshot(snap)
-        except Exception:
+        except Exception as exc:
             logger.exception("account loop failed")
+            await notify.send_error("Account loop", repr(exc))
         await asyncio.sleep(ACCOUNT_POLL_SECONDS)
 
 
