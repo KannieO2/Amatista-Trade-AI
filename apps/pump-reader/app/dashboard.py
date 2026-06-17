@@ -842,9 +842,17 @@ async function loadVelocity(){
 }
 async function actToken(sym, exch, btn){
   if(btn){ btn.disabled=true; btn.textContent="…"; }
-  try{ await fetch(`/act?symbol=${encodeURIComponent(sym)}&exchange=${encodeURIComponent(exch)}&capital_usd=100`,{method:"POST"});
-    if(btn){ btn.textContent="done"; } }
-  catch(e){ if(btn){ btn.textContent="err"; btn.disabled=false; } }
+  try{
+    const r=await fetch(`/act?symbol=${encodeURIComponent(sym)}&exchange=${encodeURIComponent(exch)}&capital_usd=100`,{method:"POST"});
+    const j=await r.json().catch(()=>null);
+    let ok=false, msg="no action";
+    if(j && j.fills && j.fills.length){ ok=true; msg="✓ bought (paper)"; }
+    else if(j && j.rejected && j.rejected.length){ msg="rejected: "+String(j.rejected[0]).split(":").pop().trim(); }
+    else if(!r.ok){ msg = (j && typeof j.detail==="string") ? j.detail : "error"; }
+    if(ok){ if(typeof loadOverview==="function") loadOverview(); if(typeof loadTrades==="function") loadTrades(); }
+    if(btn){ btn.textContent=msg; setTimeout(()=>{ btn.disabled=false; btn.textContent="Act $100"; }, 2600); }
+    return {ok, msg};
+  }catch(e){ if(btn){ btn.textContent="err"; btn.disabled=false; } return {ok:false, msg:"err"}; }
 }
 async function loadAlerts(){
   let c; try{ c=await (await fetch("/candidates")).json(); }catch(e){ return; }
@@ -1124,7 +1132,7 @@ async function renderCandidate(c){
     return `<span onclick="cdTab('${t}')" style="cursor:pointer;padding:0 0 9px;font-size:12.5px;border-bottom:2px solid ${on?'var(--purple)':'transparent'};color:${on?'#fff':'var(--muted)'}">${lbl}</span>`;
   }).join("");
   $("cd-act").disabled=false; $("cd-act").textContent="Act paper · $100";
-  $("cd-act").onclick=async ()=>{ $("cd-act").disabled=true; $("cd-act").textContent="…"; await actToken(c.symbol,c.exchange,null); $("cd-act").textContent="done"; };
+  $("cd-act").onclick=async ()=>{ $("cd-act").disabled=true; $("cd-act").textContent="…"; const res=await actToken(c.symbol,c.exchange,null); $("cd-act").textContent=res.ok?"✓ bought (paper)":(res.msg||"done"); setTimeout(()=>{ $("cd-act").disabled=false; $("cd-act").textContent="Act paper · $100"; }, 2800); };
   const base=(c.symbol||"").split("/")[0];
   $("cd-onchain").onclick=()=>window.open("https://dexscreener.com/search?q="+encodeURIComponent(base),"_blank","noopener");
   $("cd-tg").onclick=()=>window.open("https://www.google.com/search?q="+encodeURIComponent('"'+base+'" telegram pump'),"_blank","noopener");

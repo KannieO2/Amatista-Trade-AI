@@ -21,7 +21,9 @@ class RiskLimits:
     max_daily_loss_usd: float = 250.0
     max_drawdown_pct: float = 5.0
     max_position_size_usd: float = 500.0
-    max_open_trades: int = 3
+    # Paper demo is forgiving (manual "Act" + auto-entry share this cap); tune via
+    # PUMP_MAX_OPEN_TRADES. Keep it low for live.
+    max_open_trades: int = int(os.getenv("PUMP_MAX_OPEN_TRADES", "12"))
     max_leverage: float = 2.0
 
 
