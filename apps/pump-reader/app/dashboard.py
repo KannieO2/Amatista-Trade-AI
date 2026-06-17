@@ -170,12 +170,13 @@ DASHBOARD_HTML = r"""<!doctype html>
   /* modal */
   .modal-overlay{position:fixed;inset:0;background:rgba(4,6,10,.66);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;z-index:50}
   .modal-overlay.hidden{display:none}
-  .modal{width:520px;max-width:92vw;background:rgba(18,24,34,.72);border:1px solid rgba(255,255,255,.1);border-radius:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 40px 90px -20px rgba(0,0,0,.8);overflow:hidden}
+  .modal{width:520px;max-width:92vw;background:rgba(18,24,34,.72);border:1px solid rgba(255,255,255,.1);border-radius:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 40px 90px -20px rgba(0,0,0,.8);overflow:hidden;display:flex;flex-direction:column;max-height:92vh}
   .modal .mh{display:flex;align-items:flex-start;justify-content:space-between;padding:18px 18px 0}
   .modal .mh h3{margin:0;font-size:16px;font-weight:600}
   .modal .mh p{margin:5px 0 0;color:var(--muted);font-size:12px}
   .modal .mx{cursor:pointer;color:var(--muted);background:none;border:none;font-size:18px;line-height:1}
-  .modal .mb{padding:16px 18px}
+  .modal .mb{padding:16px 18px;overflow-y:auto;flex:1;min-height:0}
+  .modal .mh,.modal .mfoot{flex:0 0 auto}
   .mfield{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
   .mfield label{color:var(--muted-2);font-size:12px}
   .mfield input[type=number]{width:130px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:8px 10px;text-align:right;font-family:"Geist Mono",monospace;outline:none}
@@ -498,9 +499,15 @@ DASHBOARD_HTML = r"""<!doctype html>
       <div id="cd-tabs" style="display:flex;gap:16px;border-bottom:1px solid var(--border-soft);margin:16px 0 12px"></div>
       <div id="cd-tabbody"></div>
     </div>
-    <div class="mfoot">
-      <button class="btn" id="cd-cancel">Close</button>
-      <button class="btn primary" id="cd-act">Act paper · $100</button>
+    <div class="mfoot" style="justify-content:space-between;flex-wrap:wrap">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" id="cd-onchain">⛓ View on chain</button>
+        <button class="btn" id="cd-tg">✈ Telegram threads</button>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" id="cd-cancel">Close</button>
+        <button class="btn primary" id="cd-act">Act paper · $100</button>
+      </div>
     </div>
   </div>
 </div>
@@ -611,7 +618,8 @@ async function loadOverview(){
   $("k-positions").textContent = d.open_positions;
   $("k-positions-sub").textContent = (d.open_positions===0?"no positions open · ":"") + "executor armed (" + d.exec_mode + ")";
   $("tb-balance").textContent = fmtK(d.balance);
-  $("tb-pnl").textContent = (d.pnl_7d>=0?"+":"") + "$" + d.pnl_7d.toFixed(2);
+  const pnlEl=$("tb-pnl"); pnlEl.textContent=(d.pnl_7d>=0?"+":"-")+"$"+Math.abs(d.pnl_7d).toFixed(2);
+  pnlEl.style.color=d.pnl_7d>0?"var(--green)":d.pnl_7d<0?"var(--red)":"";
 
   const cs=d.cluster_split.classic, lp=d.cluster_split.long_pump, tot=(cs.count+lp.count)||1;
   $("cl-classic-n").textContent = cs.count + " candidates";
@@ -1040,6 +1048,9 @@ async function renderCandidate(c){
   }).join("");
   $("cd-act").disabled=false; $("cd-act").textContent="Act paper · $100";
   $("cd-act").onclick=async ()=>{ $("cd-act").disabled=true; $("cd-act").textContent="…"; await actToken(c.symbol,c.exchange,null); $("cd-act").textContent="done"; };
+  const base=(c.symbol||"").split("/")[0];
+  $("cd-onchain").onclick=()=>window.open("https://dexscreener.com/search?q="+encodeURIComponent(base),"_blank","noopener");
+  $("cd-tg").onclick=()=>window.open("https://www.google.com/search?q="+encodeURIComponent('"'+base+'" telegram pump'),"_blank","noopener");
   const body=$("cd-tabbody");
   if(cdActive==="Scoring"){ body.innerHTML=scoringTab(c); return; }
   if(cdActive==="Alerts"){ body.innerHTML=alertsTab(c, alertsN); return; }
@@ -1127,7 +1138,18 @@ function scoringTab(c){
     ["Liquidity",moneyC(c.liquidity_usd)],
     ["Last price",c.last_price],["Status",tcase(c.status)],
   ].map(s=>`<div class="sbox"><div class="l">${s[0]}</div><div class="v mono" style="font-size:14px">${s[1]}</div></div>`).join("");
+  const lp=c.score_long_pump||0, cls=c.score_classic||0, classicWins=cls>lp;
+  const winner=classicWins?"Classic":"Long Pump", wcol=classicWins?"var(--amber)":"var(--purple)";
+  const critBanner=`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 14px;padding:10px 12px;background:var(--inset);border-radius:10px">
+      <span class="px" style="color:var(--muted)">Criterion firing</span>
+      <span style="font-weight:700;color:${wcol}">▸ ${winner}</span>
+      <div style="flex:1;min-width:8px"></div>
+      <span class="mono px">Long Pump <b style="color:${classicWins?'var(--muted)':'#fff'}">${lp}</b>/100</span>
+      <span class="px" style="color:var(--muted)">·</span>
+      <span class="mono px">Classic <b style="color:${classicWins?'#fff':'var(--muted)'}">${cls}</b>/100</span>
+    </div>`;
   return `
+    ${critBanner}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;align-items:start">
       <div>
         <div class="navlabel" style="padding:0 0 4px">Component radar</div>

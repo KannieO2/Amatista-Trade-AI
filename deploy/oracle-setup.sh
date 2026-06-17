@@ -85,6 +85,7 @@ if [ ! -f "$GENV" ]; then
 MOCK_MODE=true
 DRY_RUN=true
 ALLOW_EMBED=1
+DISABLE_RATE_LIMIT=1
 DASHBOARD_PORT=3848
 LOG_LEVEL=info
 JWT_SECRET=$(openssl rand -hex 32)

@@ -87,6 +87,8 @@ class TokenCandidate(BaseModel):
     confidence_score: int
     classification: str
     cluster: str = "long_pump"
+    score_long_pump: int = 0
+    score_classic: int = 0
     flags: list[str] = Field(default_factory=list)
     spark: list[float] = Field(default_factory=list)
     status: CandidateStatus
@@ -174,6 +176,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_velocity_loop()),
         asyncio.create_task(_account_loop()),
         asyncio.create_task(_grid_sync_loop()),
+        asyncio.create_task(_daily_discover_loop()),
     ]
     try:
         yield
@@ -207,6 +210,28 @@ async def _grid_tick_loop() -> None:
         except Exception:
             logger.exception("grid tick failed")
         await asyncio.sleep(GRID_TICK_SECONDS)
+
+
+async def _daily_discover_loop() -> None:
+    """Run a full discover once per day and log a dated report (on top of the
+    fast 5-min monitor scan). First run ~30s after boot for immediate evidence."""
+    await asyncio.sleep(30)
+    while True:
+        try:
+            await _perform_scan()
+            ranked = sorted(_candidates.values(), key=lambda c: c.pump_score, reverse=True)
+            top = ranked[0] if ranked else None
+            msg = (
+                f"Daily discover · {len(_candidates)} tokens scanned · top {top.symbol} "
+                f"{top.pump_score} ({top.cluster})"
+                if top else "Daily discover · no candidates found"
+            )
+            logger.info(msg)
+            if store.enabled():
+                await store.insert_bot_log("PUMP_SCANNER", "INFO", msg)
+        except Exception:
+            logger.exception("daily discover failed")
+        await asyncio.sleep(86400)
 
 
 async def _grid_sync_loop() -> None:
@@ -386,6 +411,10 @@ async def logout():
     return resp
 
 
+_grid_token_cache: str | None = None
+_grid_token_at: float = 0.0
+
+
 @app.get("/grid-sso")
 async def grid_sso():
     """Single sign-on for the embedded GRVTBot.
@@ -394,7 +423,17 @@ async def grid_sso():
     auth middleware) logs into the GRVTBot with owner credentials server-side
     and returns the JWT so the iframe SPA boots already authenticated. The owner
     password never reaches the browser.
+
+    The minted token (GRVT JWT, 24h) is cached and reused for 12h so repeated
+    grid opens don't trip the bot's login rate-limiter.
     """
+    global _grid_token_cache, _grid_token_at
+    import time
+
+    now = time.time()
+    if _grid_token_cache and (now - _grid_token_at) < 12 * 3600:
+        return {"ok": True, "key": "grvt-grid-token", "token": _grid_token_cache}
+
     email = os.getenv("GRID_OWNER_EMAIL", "admin@tradeos.local")
     password = os.getenv("GRID_OWNER_PASSWORD", "")
     if not password:
@@ -406,10 +445,17 @@ async def grid_sso():
                 json={"email": email, "password": password},
             )
     except httpx.HTTPError:
+        if _grid_token_cache:
+            return {"ok": True, "key": "grvt-grid-token", "token": _grid_token_cache, "cached": True}
         return JSONResponse({"ok": False, "error": "grid_offline"}, status_code=502)
-    if resp.status_code != 200:
-        return JSONResponse({"ok": False, "error": "grid_login_failed"}, status_code=502)
-    return {"ok": True, "key": "grvt-grid-token", "token": resp.json().get("token")}
+    if resp.status_code == 200:
+        _grid_token_cache = resp.json().get("token")
+        _grid_token_at = now
+        return {"ok": True, "key": "grvt-grid-token", "token": _grid_token_cache}
+    # Login throttled/failed — fall back to a still-valid cached token if we have one.
+    if _grid_token_cache:
+        return {"ok": True, "key": "grvt-grid-token", "token": _grid_token_cache, "cached": True}
+    return JSONResponse({"ok": False, "error": "grid_login_failed", "code": resp.status_code}, status_code=502)
 
 
 def _record_learning_raw(symbol: str, action: str, mode: str, pump_score: int, classification: str, detail: str) -> None:
@@ -458,6 +504,8 @@ def _to_candidate(scanned: ScannedCandidate) -> TokenCandidate:
         confidence_score=scanned.confidence_score,
         classification=scanned.classification,
         cluster=scanned.cluster,
+        score_long_pump=scanned.score_long_pump,
+        score_classic=scanned.score_classic,
         flags=scanned.flags,
         spark=scanned.spark,
         status=_status_for(scanned.pump_score),
@@ -652,6 +700,29 @@ def _ago(dt: datetime) -> str:
     return f"{int(secs // 3600)}h"
 
 
+def _pnl_7d() -> float:
+    """Paper/live P&L over the last 7 days: realized exits (7d) + open unrealized.
+
+    Makes demo gains visible — every value comes from real managed positions
+    priced against the live market, nothing invented.
+    """
+    cutoff = datetime.now(UTC).timestamp() - 7 * 86400
+    realized = 0.0
+    for e in _pm.history:
+        try:
+            ts = datetime.fromisoformat(e.at).timestamp()
+        except Exception:
+            ts = cutoff  # undated event → still count it
+        if ts >= cutoff:
+            realized += e.pnl
+    unrealized = sum(
+        (p.last_price - p.entry_price) * p.qty
+        for p in _pm.positions.values()
+        if not p.closed and p.last_price > 0
+    )
+    return round(realized + unrealized, 2)
+
+
 @app.get("/overview")
 async def overview() -> dict:
     ranked = sorted(_candidates.values(), key=lambda c: c.pump_score, reverse=True)
@@ -683,7 +754,7 @@ async def overview() -> dict:
         "balance_source": "live_account" if _real_account.get("has_keys") else "paper",
         "account_connected": _real_account.get("connected", []),
         "persistence": "supabase" if store.enabled() else "memory",
-        "pnl_7d": 0.0,
+        "pnl_7d": _pnl_7d(),
         "equity_curve": _equity_history,
         "table": [
             {

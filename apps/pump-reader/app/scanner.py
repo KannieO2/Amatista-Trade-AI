@@ -56,6 +56,8 @@ class ScannedCandidate:
     confidence_score: int
     classification: str
     cluster: str = "long_pump"
+    score_long_pump: int = 0
+    score_classic: int = 0
     flags: list[str] = field(default_factory=list)
     spark: list[float] = field(default_factory=list)
 
@@ -128,43 +130,72 @@ def score_candidate(
     volume_spike: float,
     imbalance: float,
     liquidity_usd: float,
-) -> tuple[int, int, str, list[str]]:
-    """Explicit rule heuristic. Every point is traceable to a condition."""
-    score = 0.0
-    flags: list[str] = []
+) -> tuple[int, int, str, list[str], int, int, str]:
+    """Explicit rule heuristic. Scores TWO competing criteria and keeps the max.
 
+    Returns (pump_score, confidence, classification, flags, score_long_pump,
+    score_classic, cluster). The cluster is whichever criterion scores higher, so
+    the UI can say which one is "sounding" louder.
+    """
+    flags: list[str] = []
+    low_liquidity = liquidity_usd < LOW_LIQUIDITY_USD
+
+    # --- long_pump (buyer impulse): volume explosion + price run + stacked bids
+    lp = 0.0
     if volume_spike >= 10:
-        score += 45
+        lp += 45
         flags.append("extreme_volume_spike")
     elif volume_spike >= 6:
-        score += 35
+        lp += 35
         flags.append("high_volume_spike")
     elif volume_spike >= 3:
-        score += 25
+        lp += 25
         flags.append("volume_spike")
-
     if price_change_pct >= 50:
-        score += 35
+        lp += 35
         flags.append("price_parabolic")
     elif price_change_pct >= 25:
-        score += 25
+        lp += 25
         flags.append("price_running")
     elif price_change_pct >= 10:
-        score += 15
-
+        lp += 15
     if imbalance >= 0.80:
-        score += 20
+        lp += 20
         flags.append("bids_stacked")
     elif imbalance >= 0.65:
-        score += 10
-
-    low_liquidity = liquidity_usd < LOW_LIQUIDITY_USD
+        lp += 10
     if low_liquidity and volume_spike >= 3:
         # Thin book + manufactured volume is the classic scam/criminal pump tell.
-        score += 15
+        lp += 15
         flags.append("low_liquidity_trap")
 
-    pump_score = int(max(0, min(100, round(score))))
+    # --- classic (short-squeeze grind): stacked book grinding up, modest volume
+    cl = 0.0
+    if imbalance >= 0.80:
+        cl += 40
+    elif imbalance >= 0.70:
+        cl += 30
+    elif imbalance >= 0.60:
+        cl += 18
+    elif imbalance >= 0.55:
+        cl += 8
+    if 5 <= price_change_pct < 25:
+        cl += 25
+    elif 25 <= price_change_pct < 50:
+        cl += 12
+    if volume_spike < 3:
+        cl += 15
+    elif volume_spike < 6:
+        cl += 8
+    if low_liquidity and imbalance >= 0.65:
+        cl += 10
+
+    score_long_pump = int(max(0, min(100, round(lp))))
+    score_classic = int(max(0, min(100, round(cl))))
+    pump_score = max(score_long_pump, score_classic)
+    cluster = "classic" if score_classic > score_long_pump else "long_pump"
+    if cluster == "classic" and "squeeze_grind" not in flags:
+        flags.append("squeeze_grind")
 
     # Confidence rises with real liquidity (harder to fake) and a clean,
     # not-yet-exhausted move. Pure thin-book spikes stay low-confidence.
@@ -187,7 +218,7 @@ def score_candidate(
     else:
         classification = "no_signal"
 
-    return pump_score, confidence_score, classification, flags
+    return pump_score, confidence_score, classification, flags, score_long_pump, score_classic, cluster
 
 
 async def _deep_scan_symbol(
@@ -208,7 +239,7 @@ async def _deep_scan_symbol(
     imbalance, liquidity = _orderbook_metrics(order_book)
     price_change = float(ticker.get("percentage") or 0.0)
 
-    pump_score, confidence, classification, flags = score_candidate(
+    pump_score, confidence, classification, flags, score_long_pump, score_classic, cluster = score_candidate(
         price_change_pct=price_change,
         volume_spike=spike,
         imbalance=imbalance,
@@ -231,7 +262,9 @@ async def _deep_scan_symbol(
         pump_score=pump_score,
         confidence_score=confidence,
         classification=classification,
-        cluster=_cluster(price_change, spike, imbalance),
+        cluster=cluster,
+        score_long_pump=score_long_pump,
+        score_classic=score_classic,
         flags=flags,
         spark=spark,
     )
