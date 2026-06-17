@@ -40,6 +40,7 @@ from .executor import ExecMode, ExecutionEngine, Side, current_mode
 from .grid import GridBot, backtest, fetch_ohlcv_for, fetch_price
 from .grvt_proxy import register_grvt_proxy
 from .market import market_for_symbol
+from . import notify
 from .notify import format_alert, send_telegram
 from .position_manager import PositionManager
 from .risk import RiskGuard
@@ -456,6 +457,29 @@ async def grid_sso():
     if _grid_token_cache:
         return {"ok": True, "key": "grvt-grid-token", "token": _grid_token_cache, "cached": True}
     return JSONResponse({"ok": False, "error": "grid_login_failed", "code": resp.status_code}, status_code=502)
+
+
+@app.get("/telegram")
+async def telegram_status() -> dict:
+    return notify.status()
+
+
+@app.post("/telegram/config")
+async def telegram_config(token: str = Form(""), chat_id: str = Form("")) -> dict:
+    notify.configure(token=token or None, chat_id=chat_id or None)
+    notify.persist_env()
+    return notify.status()
+
+
+@app.get("/telegram/updates")
+async def telegram_updates() -> dict:
+    """List chats the bot can see, so the user can pick their group's id."""
+    return await notify.get_updates()
+
+
+@app.post("/telegram/test")
+async def telegram_test() -> dict:
+    return {"ok": await notify.send_test(), **notify.status()}
 
 
 def _record_learning_raw(symbol: str, action: str, mode: str, pump_score: int, classification: str, detail: str) -> None:

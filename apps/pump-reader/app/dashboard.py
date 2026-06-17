@@ -446,6 +446,24 @@ DASHBOARD_HTML = r"""<!doctype html>
         </div>
         <div class="empty" style="text-align:left;padding:10px 0 0">Lower the confirmation threshold to make the bot more sensitive — more alerts and paper auto-entries. 75 = strict (default). Live real-money trading still requires your API keys and explicit opt-in.</div>
       </div>
+
+      <div class="panel" style="margin-top:16px">
+        <div class="phead"><span class="pt">Telegram notifications</span><span class="px" id="tg-status">checking…</span></div>
+        <div class="gform">
+          <div class="gf" style="grid-column:1/-1"><label>Bot token (de @BotFather)</label><input id="tg-token" class="mono" placeholder="123456:ABC-DEF..." /></div>
+          <div class="gf"><label>Group chat ID</label><input id="tg-chat" class="mono" placeholder="-1001234567890" /></div>
+          <div class="gf"><label>&nbsp;</label><button class="btn" id="tg-find">Find group ID</button></div>
+        </div>
+        <div class="gactions">
+          <button class="btn primary" id="tg-save">Save</button>
+          <button class="btn" id="tg-test">Send test</button>
+          <span class="px" id="tg-msg"></span>
+        </div>
+        <div id="tg-chats" style="margin-top:8px"></div>
+        <div class="empty" style="text-align:left;padding:10px 0 0;line-height:1.7">
+          <b>Conectar tu grupo:</b> 1) En Telegram abre <b>@BotFather</b> → <b>/newbot</b> → copia el <b>token</b>. 2) Crea un grupo, agrega tu bot y envía cualquier mensaje. 3) Pega el token arriba → <b>Find group ID</b> → elige tu grupo → <b>Save</b> → <b>Send test</b>.
+        </div>
+      </div>
     </section>
   </div>
 </div>
@@ -906,6 +924,34 @@ async function loadSettings(){
     $("cfg-size").value=cfg.auto_entry_usd;
     $("cfg-accel").value=cfg.velocity_accel_factor+"x";
   }catch(e){}
+  loadTelegram();
+}
+async function loadTelegram(){
+  try{ const s=await (await fetch("/telegram")).json();
+    const el=$("tg-status");
+    el.textContent = s.configured?"connected ✓":(s.has_token?"token set · pick a group":"not configured");
+    el.style.color = s.configured?"var(--green)":"var(--muted)";
+    if(s.chat_id && !$("tg-chat").value) $("tg-chat").value=s.chat_id;
+  }catch(e){}
+}
+async function tgPost(path, params){
+  return (await fetch(path,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams(params||{})})).json();
+}
+function wireTelegram(){
+  const tk=()=>$("tg-token").value.trim(), ch=()=>$("tg-chat").value.trim();
+  $("tg-save").addEventListener("click", async ()=>{ $("tg-msg").textContent="saving…"; await tgPost("/telegram/config",{token:tk(),chat_id:ch()}); $("tg-msg").textContent="saved ✓"; loadTelegram(); });
+  $("tg-find").addEventListener("click", async ()=>{
+    $("tg-msg").textContent="reading Telegram…";
+    if(tk()) await tgPost("/telegram/config",{token:tk()});
+    const r=await (await fetch("/telegram/updates")).json();
+    $("tg-msg").textContent="";
+    if(!r.ok){ $("tg-chats").innerHTML=`<div class="empty" style="text-align:left">No pude leer (${r.error||"error"}). Pega el token y envía un mensaje en el grupo, luego reintenta.</div>`; return; }
+    if(!r.chats||!r.chats.length){ $("tg-chats").innerHTML='<div class="empty" style="text-align:left">Sin chats todavía. Agrega el bot al grupo y envía un mensaje, luego reintenta.</div>'; return; }
+    $("tg-chats").innerHTML=r.chats.map(c=>`<div style="display:flex;align-items:center;gap:8px;margin:5px 0">
+       <button class="btn" onclick="document.getElementById('tg-chat').value='${c.id}';document.getElementById('tg-msg').textContent='ID elegido — pulsa Save';">Use</button>
+       <span class="px">${tcase(c.type||"")} · <b>${c.title||"(sin título)"}</b> · <span class="mono">${c.id}</span></span></div>`).join("");
+  });
+  $("tg-test").addEventListener("click", async ()=>{ $("tg-msg").textContent="sending…"; const r=await (await fetch("/telegram/test",{method:"POST"})).json(); $("tg-msg").textContent=r.ok?"✓ enviado — revisa tu grupo":"falló (revisa token + chat id)"; });
 }
 async function saveConfig(){
   const body={
@@ -925,6 +971,7 @@ $("set-kill-on").addEventListener("click",()=>killSwitch(true));
 $("set-kill-off").addEventListener("click",()=>killSwitch(false));
 $("set-alloc-btn").addEventListener("click",openAlloc);
 $("cfg-save").addEventListener("click",saveConfig);
+wireTelegram();
 $("lrn-missed-btn").addEventListener("click",reportMissed);
 $("lrn-missed").addEventListener("keydown",(e)=>{if(e.key==="Enter")reportMissed();});
 

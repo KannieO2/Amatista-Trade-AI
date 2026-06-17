@@ -52,6 +52,27 @@ _RESP_STRIP = {
 
 _client: httpx.AsyncClient | None = None
 
+# Injected into the GRVTBot dashboard HTML so it matches the ScamPump Radar theme
+# (same dark palette + pink/purple accents) and drops the default scrollbar — the
+# grid section then reads as one integrated app, not a separate site.
+_THEME_CSS = b"""<style id="tradeos-theme">
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap');
+:root,.dark,html.dark{
+  --color-bg-base:#070a0f!important;--color-bg-surface:#0c1018!important;
+  --color-bg-elevated:#121722!important;--color-bg-muted:#161c28!important;
+  --color-border-subtle:#1b2230!important;--color-border-default:#222b3a!important;
+  --color-border-strong:#33405a!important;
+  --color-text-primary:#e6e9ef!important;--color-text-secondary:#b6bdcc!important;
+  --color-text-muted:#8b95a7!important;--color-text-disabled:#5a6477!important;
+  --color-primary:#ff2f6e!important;--color-primary-strong:#ff5a86!important;
+  --color-primary-soft:#2a0d17!important;--color-info:#7c6cff!important;
+  --color-chart-1:#7c6cff!important;--color-chart-4:#a78bfa!important;--color-chart-5:#ff2f6e!important;
+}
+html,body,#root{background:#070a0f!important;font-family:Geist,system-ui,-apple-system,sans-serif!important}
+*{scrollbar-width:none!important;-ms-overflow-style:none!important}
+*::-webkit-scrollbar{width:0!important;height:0!important;display:none!important}
+</style>"""
+
 
 def _get_client() -> httpx.AsyncClient:
     global _client
@@ -86,7 +107,14 @@ async def _proxy_http(request: Request, path: str) -> Response:
     loc = out_headers.get("location")
     if loc and loc.startswith("/") and not loc.startswith("/grid"):
         out_headers["location"] = "/grid" + loc
-    return Response(content=upstream.content, status_code=upstream.status_code, headers=out_headers)
+
+    # Inject the TradeOS theme into the dashboard HTML so the embedded GRVTBot
+    # matches the ScamPump Radar look (same palette, no scrollbars) — done here
+    # so a vanilla upstream build needs no patching.
+    content = upstream.content
+    if "text/html" in out_headers.get("content-type", "") and b"</head>" in content:
+        content = content.replace(b"</head>", _THEME_CSS + b"</head>", 1)
+    return Response(content=content, status_code=upstream.status_code, headers=out_headers)
 
 
 async def _pump_client_to_upstream(ws: WebSocket, up) -> None:
