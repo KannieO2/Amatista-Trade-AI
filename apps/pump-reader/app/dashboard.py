@@ -85,6 +85,11 @@ DASHBOARD_HTML = r"""<!doctype html>
   .grid-2{display:grid;grid-template-columns:1fr 1.32fr;gap:14px}
   .grid-2b{display:grid;grid-template-columns:1.5fr 1fr;gap:14px}
   @media(max-width:1100px){.grid-kpi{grid-template-columns:repeat(2,1fr)}.grid-2,.grid-2b{grid-template-columns:1fr}}
+  @media(max-width:760px){.app{grid-template-columns:1fr}.view{padding:14px 14px}.grid-kpi{grid-template-columns:1fr 1fr}.vhead{flex-direction:column;gap:6px}}
+  body{overflow-x:hidden}
+  /* wide tables scroll inside their panel instead of breaking the page */
+  .panel{overflow-x:auto}
+  table{width:100%;min-width:max-content}
 
   .card{background:rgba(16,21,30,.55);border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 14px 34px -22px rgba(0,0,0,.7)}
   .card .klabel{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase}
@@ -442,6 +447,21 @@ DASHBOARD_HTML = r"""<!doctype html>
           <div class="gactions"><button class="btn primary" id="set-alloc-btn">Edit capital allocation</button></div>
         </div>
       </div>
+
+      <div class="panel" style="margin-top:16px">
+        <div class="phead"><span class="pt">Bot configuration</span><span class="px">Applies live</span></div>
+        <div class="gform">
+          <div class="gf"><label>Confirmation threshold</label><input id="cfg-thr" type="number" min="1" max="100" step="1" class="mono" /></div>
+          <div class="gf"><label>Auto-entry (paper)</label><select id="cfg-auto"><option value="true">Enabled</option><option value="false">Disabled</option></select></div>
+          <div class="gf"><label>Auto-entry size (USDT)</label><input id="cfg-size" type="number" min="1" step="10" class="mono" /></div>
+          <div class="gf"><label>Velocity trigger (× volume)</label><input id="cfg-accel" class="mono" disabled /></div>
+        </div>
+        <div class="gactions">
+          <button class="btn primary" id="cfg-save">Save configuration</button>
+          <span class="px" id="cfg-msg"></span>
+        </div>
+        <div class="empty" style="text-align:left;padding:10px 0 0">Lower the confirmation threshold to make the bot more sensitive — more alerts and paper auto-entries. 75 = strict (default). Live real-money trading still requires your API keys and explicit opt-in.</div>
+      </div>
     </section>
   </div>
 </div>
@@ -506,6 +526,10 @@ DASHBOARD_HTML = r"""<!doctype html>
 const $ = (id) => document.getElementById(id);
 const fmtK = (n) => "$" + (Number(n)/1000).toFixed(1) + "K";
 const clusterColor = (c) => c === "classic" ? "var(--green)" : "var(--purple)";
+// Text formatting: Title Case for clusters/classifications/statuses, UPPER for
+// exchange ids (display only — the raw id is still used for API calls).
+const tcase = (s) => String(s||"").replace(/_/g," ").replace(/\b\w/g, m => m.toUpperCase());
+const upx = (s) => String(s||"").toUpperCase();
 
 // ---- nav view switching ----
 let activeView = "pump";
@@ -558,7 +582,7 @@ async function loadOverview(){
   $("k-monitored").textContent = d.monitored;
   $("k-exchanges").textContent = "across " + (d.exchanges||[]).join(" · ");
   if(d.score_max){ $("k-scoremax").textContent = d.score_max.value.toFixed(2);
-    $("k-scoremax-sub").textContent = `${d.score_max.symbol} · ${d.score_max.cluster.replace("_"," ")}`; }
+    $("k-scoremax-sub").textContent = `${d.score_max.symbol} · ${tcase(d.score_max.cluster)}`; }
   $("k-alerts").textContent = d.alerts_24h.total;
   $("k-alerts-sub").textContent = `${d.alerts_24h.classic} classic · ${d.alerts_24h.long_pump} long_pump`;
   $("k-positions").textContent = d.open_positions;
@@ -582,8 +606,8 @@ async function loadOverview(){
     const up = r.delta_24h>=0;
     return `<tr style="cursor:pointer" onclick="openCandidate('${r.symbol}','${r.exchange}')">
       <td><span class="scoreb mono" style="color:${sc};background:${scBg}">${r.score}</span></td>
-      <td><span class="sym">${r.symbol}</span> <span class="px">${r.exchange}</span></td>
-      <td><span class="tag"><span class="cdot" style="background:${clusterColor(r.cluster)}"></span>${r.cluster.replace("_"," ")}</span></td>
+      <td><span class="sym">${r.symbol}</span> <span class="px">${upx(r.exchange)}</span></td>
+      <td><span class="tag"><span class="cdot" style="background:${clusterColor(r.cluster)}"></span>${tcase(r.cluster)}</span></td>
       <td><div class="bar"><div class="bt"><i style="width:${Math.min(r.top20,100)}%"></i></div><span class="mono px">${r.top20}%</span></div></td>
       <td class="mono delta ${up?'up':'down'}">${up?'+':''}${r.delta_24h}%</td>
       <td>${sparkSvg(r.spark)}</td>
@@ -593,7 +617,7 @@ async function loadOverview(){
   $("alerts-body").innerHTML = (d.latest_alerts||[]).length ? d.latest_alerts.map(a=>{
     return `<div class="alert">
       <span class="scoreb mono" style="color:var(--pink);background:rgba(255,47,110,.14)">${a.score}</span>
-      <div class="meta"><div class="top"><b>${a.symbol}</b><span class="tag"><span class="cdot" style="background:${clusterColor(a.cluster)}"></span>${a.cluster.replace("_"," ")}</span></div>
+      <div class="meta"><div class="top"><b>${a.symbol}</b><span class="tag"><span class="cdot" style="background:${clusterColor(a.cluster)}"></span>${tcase(a.cluster)}</span></div>
       <div class="sub">ScamPump candidate: ${a.symbol}</div></div>
       <span class="ago mono">${a.ago}</span>
     </div>`;
@@ -713,12 +737,12 @@ async function loadTokens(){
   $("tok-body").innerHTML = c.length ? c.map(t=>{
     const up=t.price_change_pct_24h>=0;
     return `<tr style="cursor:pointer" onclick="openCandidate('${t.symbol}','${t.exchange}')"><td>${scoreBadge(t.pump_score)}</td><td class="mono px">${t.confidence_score}</td>
-      <td><span class="sym">${t.symbol}</span></td><td class="px">${t.exchange}</td>
-      <td><span class="tag"><span class="cdot" style="background:${clusterColor(t.cluster)}"></span>${t.cluster.replace("_"," ")}</span></td>
-      <td class="px">${t.classification.replace(/_/g," ")}</td>
+      <td><span class="sym">${t.symbol}</span></td><td class="px">${upx(t.exchange)}</td>
+      <td><span class="tag"><span class="cdot" style="background:${clusterColor(t.cluster)}"></span>${tcase(t.cluster)}</span></td>
+      <td class="px">${tcase(t.classification)}</td>
       <td class="mono delta ${up?'up':'down'}">${up?'+':''}${t.price_change_pct_24h}%</td>
       <td class="mono">${t.volume_spike}x</td><td class="mono">${money(t.liquidity_usd)}</td>
-      <td class="px">${(t.flags||[]).join(", ")||"—"}</td><td class="px">${t.status.replace(/_/g," ")}</td>
+      <td class="px">${(t.flags||[]).map(tcase).join(", ")||"—"}</td><td class="px">${tcase(t.status)}</td>
       <td><button class="btn" style="padding:4px 10px" onclick="event.stopPropagation();actToken('${t.symbol}','${t.exchange}',this)">Act</button></td></tr>`;
   }).join("") : `<tr><td colspan="12" class="empty">No candidates yet · run Update on Overview</td></tr>`;
   loadVelocity();
@@ -726,15 +750,15 @@ async function loadTokens(){
 async function loadVelocity(){
   let v; try{ v=await (await fetch("/velocity")).json(); }catch(e){ return; }
   const w=v.watching||[];
-  $("vel-meta").textContent = `fire ≥ ${v.accel_factor}x · ${w.length} watched`;
+  $("vel-meta").textContent = `Fire ≥ ${v.accel_factor}x · ${w.length} watched`;
   $("vel-body").innerHTML = w.length ? w.map(x=>{
     const hot=Number(x.last_accel)>=Number(v.accel_factor);
     return `<div class="alert">
       <span class="badge" style="background:${hot?'#3a1414':'#16241a'};color:${hot?'#ff6b6b':'#7CFFB2'}">${x.last_accel}x</span>
-      <div class="meta"><div class="top"><b>${x.symbol}</b><span class="px">${x.exchange}</span>
-        ${hot?'<span class="tag" style="color:#ff6b6b">accelerating</span>':'<span class="tag">priming</span>'}</div>
-        <div class="sub">baseline vol ${x.baseline_vol} · ${x.primed?'primed':'warming up'}</div></div>
-      <span class="ago mono">${hot?'TRIGGER':'watch'}</span></div>`;
+      <div class="meta"><div class="top"><b>${x.symbol}</b><span class="px">${upx(x.exchange)}</span>
+        ${hot?'<span class="tag" style="color:#ff6b6b">Accelerating</span>':'<span class="tag">Priming</span>'}</div>
+        <div class="sub">Baseline vol ${x.baseline_vol} · ${x.primed?'Primed':'Warming up'}</div></div>
+      <span class="ago mono">${hot?'TRIGGER':'Watch'}</span></div>`;
   }).join("") : `<div class="empty">No hot symbols (score ≥ watch min) right now</div>`;
 }
 async function actToken(sym, exch, btn){
@@ -749,10 +773,10 @@ async function loadAlerts(){
   $("al-ts").textContent=new Date().toLocaleTimeString(); $("al-count").textContent=al.length+" active";
   $("al-body").innerHTML = al.length ? al.map(a=>`
     <div class="alert">${scoreBadge(a.pump_score)}
-      <div class="meta"><div class="top"><b>${a.symbol}</b><span class="px">${a.exchange}</span>
-        <span class="tag"><span class="cdot" style="background:${clusterColor(a.cluster)}"></span>${a.cluster.replace("_"," ")}</span></div>
-        <div class="sub">ScamPump candidate: ${a.symbol} · ${(a.flags||[]).join(", ")||"no flags"}</div></div>
-      <span class="ago mono">${a.classification.replace(/_/g," ")}</span></div>`).join("")
+      <div class="meta"><div class="top"><b>${a.symbol}</b><span class="px">${upx(a.exchange)}</span>
+        <span class="tag"><span class="cdot" style="background:${clusterColor(a.cluster)}"></span>${tcase(a.cluster)}</span></div>
+        <div class="sub">ScamPump candidate: ${a.symbol} · ${(a.flags||[]).map(tcase).join(", ")||"no flags"}</div></div>
+      <span class="ago mono">${tcase(a.classification)}</span></div>`).join("")
     : `<div class="empty">No candidates above the confirmation threshold right now</div>`;
 }
 async function loadLearning(){
@@ -761,7 +785,7 @@ async function loadLearning(){
   $("le-body").innerHTML = l.length ? l.slice().reverse().map(e=>`
     <tr><td class="mono px">${new Date(e.created_at).toLocaleTimeString()}</td><td class="sym">${e.symbol}</td>
     <td class="px">${e.action}</td><td class="mono">${e.mode}</td><td>${scoreBadge(e.pump_score)}</td>
-    <td class="px">${e.classification.replace(/_/g," ")}</td><td class="px">${e.detail}</td></tr>`).join("")
+    <td class="px">${tcase(e.classification)}</td><td class="px">${e.detail}</td></tr>`).join("")
     : `<tr><td colspan="7" class="empty">No learning events yet · act on a candidate to record one</td></tr>`;
 }
 async function loadTrades(){
@@ -771,7 +795,7 @@ async function loadTrades(){
   $("mg-thr").textContent="thr "+m.adaptive_threshold;
   $("mg-body").innerHTML=(m.open||[]).length ? m.open.map(o=>{
     const up=o.gain_pct>=0;
-    return `<tr><td class="sym">${o.symbol} <span class="px">${o.exchange}</span></td><td class="mono px">${o.entry_price}</td>
+    return `<tr><td class="sym">${o.symbol} <span class="px">${upx(o.exchange)}</span></td><td class="mono px">${o.entry_price}</td>
       <td class="mono">${o.last_price}</td><td class="mono delta ${up?'up':'down'}">${up?'+':''}${o.gain_pct}%</td>
       <td><span class="px">phase ${o.phase}</span></td>
       <td class="mono" style="color:${o.unrealized_pnl>=0?'var(--green)':'var(--red)'}">${o.unrealized_pnl>=0?'+':''}${o.unrealized_pnl}</td></tr>`;
@@ -783,7 +807,7 @@ async function loadTrades(){
   $("tr-ts").textContent=new Date().toLocaleTimeString(); $("tr-count").textContent=p.length+" fills";
   $("tr-body").innerHTML = p.length ? p.slice().reverse().map(f=>`
     <tr><td class="mono px">${new Date(f.created_at).toLocaleTimeString()}</td><td class="mono">${f.mode}</td>
-    <td class="px">${f.exchange}</td><td class="sym">${f.symbol}</td>
+    <td class="px">${upx(f.exchange)}</td><td class="sym">${f.symbol}</td>
     <td style="color:${f.side==='buy'?'var(--green)':'var(--red)'};font-weight:600">${f.side}</td>
     <td class="mono">${money(f.notional_usd)}</td><td class="mono">${f.fill_price}</td><td class="mono">${f.amount}</td>
     <td class="mono px">${f.stop_loss}</td><td class="mono px">${f.take_profit}</td></tr>`).join("")
@@ -806,14 +830,35 @@ async function loadSettings(){
   try{
     const acct=await (await fetch("/account")).json();
     $("set-account").innerHTML = acct.has_keys
-      ? `<span style="color:var(--green)">${acct.connected.join(", ")} · ${money(acct.total_usdt)}</span>`
-      : '<span style="color:var(--muted)">paper (no keys)</span>';
+      ? `<span style="color:var(--green)">${acct.connected.map(upx).join(", ")} · ${money(acct.total_usdt)}</span>`
+      : '<span style="color:var(--muted)">Paper (no keys)</span>';
   }catch(e){ $("set-account").textContent="—"; }
+  try{
+    const cfg=await (await fetch("/settings")).json();
+    $("cfg-thr").value=cfg.confirmation_threshold;
+    $("cfg-auto").value=String(cfg.auto_entry);
+    $("cfg-size").value=cfg.auto_entry_usd;
+    $("cfg-accel").value=cfg.velocity_accel_factor+"x";
+  }catch(e){}
+}
+async function saveConfig(){
+  const body={
+    confirmation_threshold:Number($("cfg-thr").value),
+    auto_entry:$("cfg-auto").value==="true",
+    auto_entry_usd:Number($("cfg-size").value),
+  };
+  $("cfg-msg").textContent="saving…";
+  try{
+    const r=await fetch("/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    if(!r.ok) throw 0;
+    $("cfg-msg").textContent="saved ✓"; loadSettings();
+  }catch(e){ $("cfg-msg").textContent="error"; }
 }
 async function killSwitch(active){ try{ await fetch(`/risk/kill-switch?active=${active}&reason=manual`,{method:"POST"}); loadSettings(); }catch(e){} }
 $("set-kill-on").addEventListener("click",()=>killSwitch(true));
 $("set-kill-off").addEventListener("click",()=>killSwitch(false));
 $("set-alloc-btn").addEventListener("click",openAlloc);
+$("cfg-save").addEventListener("click",saveConfig);
 
 // ---- candidate detail modal ----
 function ringSvg(score, color){
@@ -914,18 +959,18 @@ async function loadDetail(c){
 async function renderCandidate(c){
   cdCur=c;
   $("cd-symbol").textContent=c.symbol;
-  $("cd-sub").textContent=`${c.exchange} · ${c.classification.replace(/_/g," ")} · last signal ${ago(c.updated_at)}`;
+  $("cd-sub").textContent=`${upx(c.exchange)} · ${tcase(c.classification)} · last signal ${ago(c.updated_at)}`;
   const col=c.pump_score>=70?"var(--pink)":c.pump_score>=40?"var(--amber)":"var(--muted)";
   $("cd-ring").innerHTML=ringSvg(c.pump_score,col);
   $("cd-chips").innerHTML=`
-    <span class="tag"><span class="cdot" style="background:${clusterColor(c.cluster)}"></span>${c.cluster.replace("_"," ")}</span>
+    <span class="tag"><span class="cdot" style="background:${clusterColor(c.cluster)}"></span>${tcase(c.cluster)}</span>
     <span class="badge" style="background:var(--inset)">age ${ago(c.updated_at)}</span>
     <span class="badge" style="background:var(--inset)">Top20% ${(c.orderbook_imbalance*100).toFixed(1)}%</span>
     <span class="badge" style="background:var(--inset)">Liq ${money(c.liquidity_usd)}</span>
     <span class="badge" id="cd-mcap" style="background:var(--inset);color:var(--muted)">MCap … · FDV …</span>`;
   loadMarketChip(c.symbol);
   $("cd-tags").innerHTML=`<span class="px">confidence <b class="mono">${c.confidence_score}</b>/100</span>
-    <span class="px">flags: ${(c.flags||[]).join(", ")||"none"}</span>`;
+    <span class="px">flags: ${(c.flags||[]).map(tcase).join(", ")||"none"}</span>`;
   const alertsN = c.status==="waiting_confirmation"?1:0;
   $("cd-tabs").innerHTML=CD_TABS.map(t=>{
     const on=t===cdActive, lbl=t==="Alerts"?`Alerts · ${alertsN}`:t;
@@ -1002,7 +1047,7 @@ function inflowsTab(d){
 }
 function alertsTab(c, alertsN){
   return alertsN
-    ? `<div class="alert">${scoreBadge(c.pump_score)}<div class="meta"><div class="top"><b>${c.symbol}</b><span class="px">crossed confirmation</span></div><div class="sub">${(c.flags||[]).join(", ")||"no flags"} · Telegram alert sent</div></div><span class="ago mono">${c.classification.replace(/_/g," ")}</span></div>`
+    ? `<div class="alert">${scoreBadge(c.pump_score)}<div class="meta"><div class="top"><b>${c.symbol}</b><span class="px">crossed confirmation</span></div><div class="sub">${(c.flags||[]).map(tcase).join(", ")||"no flags"} · Telegram alert sent</div></div><span class="ago mono">${tcase(c.classification)}</span></div>`
     : `<div class="empty">No alert yet · score ${c.pump_score} below the confirmation threshold</div>`;
 }
 function scoringTab(c){
@@ -1018,7 +1063,7 @@ function scoringTab(c){
     ["Δ24h",(c.price_change_pct_24h>=0?"+":"")+c.price_change_pct_24h+"%"],
     ["Volume",c.volume_spike+"x"],["Top20%",(c.orderbook_imbalance*100).toFixed(1)+"%"],
     ["Liquidity","$"+Math.round(c.liquidity_usd).toLocaleString()],
-    ["Last price",c.last_price],["Status",c.status.replace(/_/g," ")],
+    ["Last price",c.last_price],["Status",tcase(c.status)],
   ].map(s=>`<div class="sbox"><div class="l">${s[0]}</div><div class="v mono" style="font-size:14px">${s[1]}</div></div>`).join("");
   return `
     <div style="display:grid;grid-template-columns:270px 1fr;gap:18px;align-items:start">

@@ -722,6 +722,46 @@ async def token_detail(symbol: str, exchange: str) -> dict:
     return detail
 
 
+class SettingsRequest(BaseModel):
+    confirmation_threshold: float | None = Field(default=None, ge=1, le=100)
+    auto_entry: bool | None = None
+    auto_entry_usd: float | None = Field(default=None, ge=1)
+
+
+def _settings_payload() -> dict:
+    return {
+        "confirmation_threshold": round(_adaptive_threshold, 1),
+        "auto_entry": AUTO_ENTRY,
+        "auto_entry_usd": AUTO_ENTRY_USD,
+        "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
+        "velocity_accel_factor": _velocity.status().get("accel_factor"),
+        "exec_mode": current_mode().value,
+        "exchanges": _scan_exchanges(),
+    }
+
+
+@app.get("/settings")
+async def get_settings() -> dict:
+    return _settings_payload()
+
+
+@app.post("/settings")
+async def update_settings(req: SettingsRequest) -> dict:
+    """Live bot configuration. Lowering the confirmation threshold makes the bot
+    more sensitive (more alerts + paper auto-entries)."""
+    global _adaptive_threshold, AUTO_ENTRY, AUTO_ENTRY_USD
+    if req.confirmation_threshold is not None:
+        _adaptive_threshold = float(req.confirmation_threshold)
+    if req.auto_entry is not None:
+        AUTO_ENTRY = bool(req.auto_entry)
+    if req.auto_entry_usd is not None:
+        AUTO_ENTRY_USD = float(req.auto_entry_usd)
+    # Re-evaluate candidate statuses so the Alerts view reflects the change now.
+    for c in _candidates.values():
+        c.status = _status_for(c.pump_score)
+    return _settings_payload()
+
+
 @app.get("/learning", response_model=list[LearningRecord])
 async def list_learning() -> list[LearningRecord]:
     return _learning
