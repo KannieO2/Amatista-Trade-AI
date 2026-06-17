@@ -17,6 +17,12 @@ from enum import StrEnum
 from statistics import mean, median
 from uuid import uuid4
 
+from dotenv import load_dotenv
+
+# Load .env (SUPABASE_*, exchange keys, Telegram) before importing modules that
+# read these at import time (store, executor, velocity, …).
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
@@ -269,6 +275,12 @@ async def _handle_exit(pos, event) -> None:
     )
     await store.insert_exit(event.__dict__)
     await _persist_position(pos)
+    await store.insert_bot_log(
+        "PUMP_SCANNER",
+        "PANIC_SELL" if event.reason in ("dump", "hard_stop") else "TRADE_SELL",
+        f"{event.reason} {pos.symbol} sold {pct}% @ {event.price}",
+        pnl=event.pnl,
+    )
     await send_telegram(
         f"💰 {event.reason.upper()} {pos.symbol} ({pos.exchange}) sold {pct}% @ {event.price} · pnl {event.pnl:+.2f}"
     )
@@ -380,6 +392,11 @@ async def _auto_enter(candidate: TokenCandidate) -> None:
         if opened:
             await _persist_position(opened)
         _record_learning(candidate.symbol, "auto_entry", "paper", candidate, f"bought ${AUTO_ENTRY_USD:.0f} @ {fill.fill_price}")
+        await store.insert_bot_log(
+            "PUMP_SCANNER", "TRADE_BUY",
+            f"Auto-entry {candidate.symbol} ${AUTO_ENTRY_USD:.0f} @ {fill.fill_price}",
+            volumen=candidate.volume_spike,
+        )
         await send_telegram(
             f"🚨 ENTRY {candidate.symbol} ({candidate.exchange}) score {candidate.pump_score} · ${AUTO_ENTRY_USD:.0f} @ {fill.fill_price}"
         )
@@ -401,6 +418,16 @@ async def _perform_scan(min_pump_score: int = 1) -> ScanResponse:
                 "pump_score": candidate.pump_score, "classification": candidate.classification,
                 "flags": candidate.flags,
             })
+            await store.insert_pump_candidate({
+                "symbol": candidate.symbol, "exchange": candidate.exchange.upper(),
+                "current_spread": None, "volume_acceleration": candidate.volume_spike,
+                "status": "TRIGGERED",
+            })
+            await store.insert_bot_log(
+                "PUMP_SCANNER", "INFO",
+                f"Alert {candidate.symbol} ({candidate.exchange.upper()}) score {candidate.pump_score} · {candidate.classification}",
+                volumen=candidate.volume_spike,
+            )
             if AUTO_ENTRY and current_mode() == ExecMode.paper and not _pm.has(candidate.exchange, candidate.symbol):
                 await _auto_enter(candidate)
     _last_scan_at = datetime.now(UTC)

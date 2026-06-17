@@ -125,3 +125,18 @@ async def insert_account_snapshot(snap: dict) -> None:
 
 async def upsert_token_market(market: dict) -> None:
     await _upsert("token_market", market, on_conflict="symbol")
+
+
+# --- dashboard-control schema (bot_controls / bot_logs / pump_candidates) -----
+# These match the Next.js dashboard tables. Writes go through the service key.
+
+async def insert_bot_log(bot_name: str, status: str, message: str,
+                         pnl: float | None = None, volumen: float | None = None) -> None:
+    await _insert("bot_logs", {
+        "bot_name": bot_name, "status": status, "message": message,
+        "pnl": pnl, "volumen": volumen,
+    })
+
+
+async def insert_pump_candidate(row: dict) -> None:
+    await _insert("pump_candidates", row)
