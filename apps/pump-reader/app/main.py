@@ -12,6 +12,8 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+
+import httpx
 from datetime import UTC, datetime
 from enum import StrEnum
 from statistics import mean, median
@@ -36,6 +38,7 @@ from .account import real_balances
 from .dashboard import DASHBOARD_HTML
 from .executor import ExecMode, ExecutionEngine, Side, current_mode
 from .grid import GridBot, backtest, fetch_ohlcv_for, fetch_price
+from .grvt_proxy import register_grvt_proxy
 from .market import market_for_symbol
 from .notify import format_alert, send_telegram
 from .position_manager import PositionManager
@@ -324,6 +327,9 @@ def _apply_learning(quality: str) -> None:
 
 app = FastAPI(title="TradeOS AI Pump Reader", version="0.4.0", lifespan=lifespan)
 
+# Same-origin reverse proxy to the real GRVTBot (Node) under /grid/*.
+register_grvt_proxy(app)
+
 _PUBLIC_PATHS = {"/login", "/logout", "/health"}
 
 
@@ -361,6 +367,32 @@ async def logout():
     resp = RedirectResponse("/login", status_code=303)
     resp.delete_cookie(COOKIE)
     return resp
+
+
+@app.get("/grid-sso")
+async def grid_sso():
+    """Single sign-on for the embedded GRVTBot.
+
+    The TradeOS login is the only login the user sees. This route (gated by the
+    auth middleware) logs into the GRVTBot with owner credentials server-side
+    and returns the JWT so the iframe SPA boots already authenticated. The owner
+    password never reaches the browser.
+    """
+    email = os.getenv("GRID_OWNER_EMAIL", "admin@tradeos.local")
+    password = os.getenv("GRID_OWNER_PASSWORD", "")
+    if not password:
+        return JSONResponse({"ok": False, "error": "GRID_OWNER_PASSWORD not set"}, status_code=500)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                "http://127.0.0.1:3848/api/v2/auth/login",
+                json={"email": email, "password": password},
+            )
+    except httpx.HTTPError:
+        return JSONResponse({"ok": False, "error": "grid_offline"}, status_code=502)
+    if resp.status_code != 200:
+        return JSONResponse({"ok": False, "error": "grid_login_failed"}, status_code=502)
+    return {"ok": True, "key": "grvt-grid-token", "token": resp.json().get("token")}
 
 
 def _record_learning_raw(symbol: str, action: str, mode: str, pump_score: int, classification: str, detail: str) -> None:

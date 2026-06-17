@@ -197,6 +197,18 @@ DASHBOARD_HTML = r"""<!doctype html>
   .btn.primary{background:var(--pink);border-color:var(--pink);color:#fff}
   .btn.primary:disabled{opacity:.4;cursor:not-allowed}
   .empty{color:var(--muted);text-align:center;padding:26px;font-size:12px}
+  /* top-level mode switch (Pump <-> Grid) */
+  .modeswitch{display:inline-flex;background:rgba(12,16,24,.7);border:1px solid var(--border);border-radius:11px;padding:3px;gap:3px}
+  .modeswitch button{display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;color:var(--muted);font-family:inherit;font-size:12px;font-weight:600;padding:7px 14px;border-radius:8px;cursor:pointer;transition:all .14s ease}
+  .modeswitch button svg{width:14px;height:14px}
+  .modeswitch button.on{background:var(--pink);color:#fff;box-shadow:0 6px 18px -8px var(--pink)}
+  .modeswitch button:not(.on):hover{color:var(--text)}
+  .app.grid-mode{grid-template-columns:1fr}
+  .app.grid-mode .sidebar{display:none}
+  .app.grid-mode .search{display:none}
+  #tb-pump-only{display:inline-flex;align-items:center;gap:8px}
+  .app.grid-mode #tb-pump-only{display:none}
+  #view-grvt{padding:14px 18px 18px}
 </style>
 </head>
 <body>
@@ -212,23 +224,25 @@ DASHBOARD_HTML = r"""<!doctype html>
       <a data-view="trades"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 7-8"/></svg>Trades<span class="badge">P6</span></a>
       <a data-view="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>Settings</a>
     </nav>
-    <div class="navlabel">GRVTBot</div>
-    <nav class="nav">
-      <a data-view="grvt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M8 17V9M13 17V5M18 17v-6"/></svg>Grid Trading</a>
-    </nav>
   </aside>
 
   <div class="main">
     <header class="topbar">
+      <div class="modeswitch">
+        <button data-mode="pump" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Pump Reader</button>
+        <button data-mode="grid"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M8 17V9M13 17V5M18 17v-6"/></svg>Grid Bot</button>
+      </div>
       <div class="search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
         <input placeholder="Search tokens by symbol or name..." />
       </div>
       <div class="tb-actions">
-        <button class="pill" id="btn-discover"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>Discover</button>
-        <button class="pill" id="btn-update"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>Update</button>
-        <button class="pill" id="btn-balance">Balance <b id="tb-balance" class="mono">$0.0K</b></button>
-        <span class="pill">PNL 7D <b id="tb-pnl" class="mono">+$0.00</b></span>
+        <span id="tb-pump-only">
+          <button class="pill" id="btn-discover"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>Discover</button>
+          <button class="pill" id="btn-update"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>Update</button>
+          <button class="pill" id="btn-balance">Balance <b id="tb-balance" class="mono">$0.0K</b></button>
+          <span class="pill">PNL 7D <b id="tb-pnl" class="mono">+$0.00</b></span>
+        </span>
         <span class="pill live green"><span class="ldot"></span>Live</span>
         <a class="pill" href="/logout" style="text-decoration:none">Logout</a>
       </div>
@@ -311,60 +325,17 @@ DASHBOARD_HTML = r"""<!doctype html>
       <div class="vhead">
         <div>
           <h1>GRVTBot · Grid Trading</h1>
-          <p>Grid-trading bot · same app, different section · paper engine (live GRVT needs your keys)</p>
+          <p>The real GRVTBot, embedded in this same app — grid bot for GRVT perpetual futures (mock mode until you add GRVT keys)</p>
         </div>
-        <div id="grvt-badge"><span class="statusbadge">idle</span></div>
+        <div><a class="btn" href="/grid/dashboard/" target="_blank" rel="noopener">Open Full Screen ↗</a></div>
       </div>
 
-      <div class="navlabel" style="padding:4px 2px 6px">Grid engine runs inside this app (paper) · live GRVT execution needs your keys in <b>external/GRVTBot/.env</b></div>
-
-      <div class="grid-2">
-        <div class="panel">
-          <div class="phead"><span class="pt">Grid configuration</span><span class="px">paper</span></div>
-          <div class="gform">
-            <div class="gf"><label>Pair</label><input id="g-pair" value="BTC/USDT" /></div>
-            <div class="gf"><label>Capital (USDT)</label><input id="g-capital" type="number" value="1000" min="0" step="50" class="mono" /></div>
-            <div class="gf"><label>Lower price</label><input id="g-lower" type="number" value="0" step="any" class="mono" /></div>
-            <div class="gf"><label>Upper price</label><input id="g-upper" type="number" value="0" step="any" class="mono" /></div>
-            <div class="gf"><label>Grid levels</label><input id="g-levels" type="number" value="20" min="2" max="200" class="mono" /></div>
-            <div class="gf"><label>&nbsp;</label><button class="btn" id="g-suggest">Auto-range ±8%</button></div>
-          </div>
-          <div class="gactions">
-            <button class="btn primary" id="g-start">Configure &amp; Start</button>
-            <button class="btn" id="g-back">Backtest 7d</button>
-            <button class="btn" id="g-stop">Stop</button>
-            <span class="px" id="g-msg"></span>
-          </div>
-          <div id="g-bt" style="margin-top:12px"></div>
-          <div class="empty" id="grvt-note" style="text-align:left;padding:12px 0 0"></div>
-        </div>
-
-        <div class="panel">
-          <div class="phead"><span class="pt">Performance</span><span class="px" id="grvt-pair-px">—</span></div>
-          <div class="statgrid">
-            <div class="sbox"><div class="l">Equity</div><div class="v mono" id="g-equity">$0</div></div>
-            <div class="sbox"><div class="l">Realized PnL</div><div class="v mono" id="g-realized">$0</div></div>
-            <div class="sbox"><div class="l">Unrealized</div><div class="v mono" id="g-unreal">$0</div></div>
-          </div>
-          <div class="statgrid" style="margin-top:8px">
-            <div class="sbox"><div class="l">Position</div><div class="v mono" id="g-position">0</div></div>
-            <div class="sbox"><div class="l">Active slots</div><div class="v mono" id="g-slots">0</div></div>
-            <div class="sbox"><div class="l">Last price</div><div class="v mono" id="g-last">0</div></div>
-          </div>
-          <div id="grvt-equity" style="margin-top:14px"></div>
-        </div>
+      <div class="panel" style="padding:0;overflow:hidden">
+        <iframe id="grvt-frame" title="GRVTBot"
+          style="width:100%;height:calc(100vh - 150px);min-height:640px;border:0;border-radius:14px;background:#0b0e14;display:block"></iframe>
       </div>
-
-      <div class="grid-2b">
-        <div class="panel">
-          <div class="phead"><span class="pt">Grid levels</span><span class="px">virtual</span></div>
-          <div id="grvt-ladder"><div class="empty">Configure a grid to see levels</div></div>
-        </div>
-        <div class="panel">
-          <div class="phead"><span class="pt">Recent fills</span><span class="px">paper</span></div>
-          <table><thead><tr><th>Side</th><th>Price</th><th>Qty</th><th>PnL</th></tr></thead>
-          <tbody id="grvt-fills"><tr><td colspan="4" class="empty">No fills yet</td></tr></tbody></table>
-        </div>
+      <div class="empty" id="grvt-offline" style="display:none;text-align:left;padding:14px 2px 0">
+        GRVTBot no responde. Inicia el proceso Node: ejecuta <b>start-grvtbot.bat</b> y recarga la página.
       </div>
     </section>
 
@@ -583,10 +554,28 @@ document.querySelectorAll(".nav a[data-view]").forEach(a => {
     document.querySelectorAll(".view").forEach(v => v.classList.add("hidden"));
     activeView = a.dataset.view;
     $("view-" + activeView).classList.remove("hidden");
-    const loaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, settings:loadSettings, grvt:loadGrvt};
+    const loaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, settings:loadSettings};
     if (loaders[activeView]) loaders[activeView]();
   });
 });
+
+// ---- top-level mode switch: Pump Reader <-> Grid Bot (same app) ----
+let appMode = "pump";
+function setMode(m){
+  appMode = m;
+  document.querySelector(".app").classList.toggle("grid-mode", m === "grid");
+  document.querySelectorAll(".modeswitch button").forEach(b => b.classList.toggle("on", b.dataset.mode === m));
+  document.querySelectorAll(".view").forEach(v => v.classList.add("hidden"));
+  if (m === "grid"){
+    $("view-grvt").classList.remove("hidden");
+    loadGrvt();
+  } else {
+    $("view-" + activeView).classList.remove("hidden");
+    const loaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, settings:loadSettings};
+    if (loaders[activeView]) loaders[activeView]();
+  }
+}
+document.querySelectorAll(".modeswitch button").forEach(b => b.addEventListener("click", () => setMode(b.dataset.mode)));
 
 // ---- inline SVG charts ----
 function sparkSvg(vals){
@@ -677,79 +666,29 @@ function moneyC(n){n=Number(n)||0;const a=Math.abs(n),s=n<0?"-":"";
   if(a>=1e3)return s+"$"+(a/1e3).toFixed(1)+"K";
   return s+"$"+a.toFixed(a<1?6:2);}
 async function loadGrvt(){
-  let g; try{ g=await (await fetch("/grvt/status")).json(); }catch(e){ return; }
-  $("grvt-badge").innerHTML = g.running
-    ? '<span class="statusbadge run">running</span>'
-    : '<span class="statusbadge">idle</span>';
-  $("grvt-pair-px").textContent = g.pair + (g.last_price?" · "+g.last_price:"");
-  $("g-equity").textContent = money(g.equity);
-  const rp=$("g-realized"); rp.textContent=(g.realized_pnl>=0?"+":"")+money(g.realized_pnl); rp.style.color=g.realized_pnl>=0?"var(--green)":"var(--red)";
-  const up=$("g-unreal"); up.textContent=(g.unrealized_pnl>=0?"+":"")+money(g.unrealized_pnl); up.style.color=g.unrealized_pnl>=0?"var(--green)":"var(--red)";
-  $("g-position").textContent=g.position;
-  $("g-slots").textContent=g.active_slots+" / "+Math.max(g.grid_levels-1,0);
-  $("g-last").textContent=g.last_price||"—";
-  $("grvt-note").textContent=g.note||"";
-  $("grvt-equity").innerHTML = (g.equity_curve&&g.equity_curve.length>1)?equitySvg(g.equity_curve):'<div class="px">Start the grid to plot equity</div>';
-
-  if(!grvtFormInit && g.grid_lower>0){ $("g-pair").value=g.pair; $("g-lower").value=g.grid_lower; $("g-upper").value=g.grid_upper; $("g-levels").value=g.grid_levels; $("g-capital").value=g.capital; grvtFormInit=true; }
-
-  // grid ladder
-  const lv=g.grid||[], held=g.held||[], px=g.last_price, lo=g.grid_lower, hi=g.grid_upper;
-  if(lv.length){
-    let near=-1,best=1e18; lv.forEach((p,i)=>{const dd=Math.abs(p-px); if(px&&dd<best){best=dd;near=i;}});
-    $("grvt-ladder").innerHTML='<div class="ladder">'+lv.map((p,i)=>{
-      const hh=(i<held.length&&held[i]);
-      const w=hi>lo?((p-lo)/(hi-lo)*100):0;
-      return `<div class="lvl ${i===near?'cur':''}"><span class="ld ${hh?'held':''}"></span><span class="lp">${p}</span><span class="lbar"><i style="width:${w}%"></i></span></div>`;
-    }).reverse().join("")+'</div>';
-  } else { $("grvt-ladder").innerHTML='<div class="empty">Configure a grid to see levels</div>'; }
-
-  // fills
-  $("grvt-fills").innerHTML = (g.fills&&g.fills.length) ? g.fills.map(f=>
-    `<tr><td style="color:${f.side==='buy'?'var(--green)':'var(--red)'};font-weight:600">${f.side}</td><td class="mono">${f.price}</td><td class="mono">${f.qty}</td><td class="mono" style="color:${f.pnl>0?'var(--green)':'var(--muted)'}">${f.pnl>0?'+':''}${f.pnl}</td></tr>`
-  ).join("") : '<tr><td colspan="4" class="empty">No fills yet</td></tr>';
+  // The real GRVTBot renders itself inside the iframe (#grvt-frame), served
+  // same-origin through the /grid/* reverse proxy. Nothing to render here — we
+  // only probe the Node backend once so we can show a friendly note if it's
+  // not running (otherwise the iframe just shows a blank/error page).
+  const off=$("grvt-offline"), fr=$("grvt-frame");
+  try{
+    const r=await fetch("/grid/api/health",{cache:"no-store"});
+    if(!r.ok) throw 0;
+    // Single sign-on: the TradeOS login is the only login. We mint a GRVT
+    // session on the backend (owner creds never touch the browser) and stash
+    // the JWT where the embedded SPA reads it (same-origin localStorage), so
+    // the iframe boots already authenticated instead of showing its own login.
+    try{
+      const s=await fetch("/grid-sso",{cache:"no-store"});
+      if(s.ok){ const j=await s.json(); if(j.ok && j.token) localStorage.setItem(j.key||"grvt-grid-token", j.token); }
+    }catch(_){}
+    if(off) off.style.display="none";
+    if(fr){ fr.style.display="block"; if(!fr.getAttribute("src")) fr.setAttribute("src","/grid/dashboard/"); }
+  }catch(e){
+    if(off) off.style.display="block";
+    if(fr) fr.style.display="none";
+  }
 }
-
-$("g-suggest").addEventListener("click", async ()=>{
-  const sym=$("g-pair").value.replace("/","").toUpperCase();
-  $("g-msg").textContent="fetching price…";
-  try{ const j=await (await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}`)).json();
-    const p=Number(j.price); if(p>0){ $("g-lower").value=(p*0.92).toPrecision(6); $("g-upper").value=(p*1.08).toPrecision(6); $("g-msg").textContent="range set around "+p; } else $("g-msg").textContent="pair not found";
-  }catch(e){ $("g-msg").textContent="price fetch failed"; }
-});
-$("g-start").addEventListener("click", async ()=>{
-  const body={pair:$("g-pair").value,lower:Number($("g-lower").value),upper:Number($("g-upper").value),levels:Number($("g-levels").value),capital:Number($("g-capital").value)};
-  $("g-msg").textContent="starting…";
-  try{
-    const c=await fetch("/grvt/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-    if(!c.ok){ $("g-msg").textContent="config error: "+(await c.json()).detail; return; }
-    await fetch("/grvt/start",{method:"POST"}); grvtFormInit=true; $("g-msg").textContent="running"; loadGrvt();
-  }catch(e){ $("g-msg").textContent="start failed"; }
-});
-$("g-stop").addEventListener("click", async ()=>{ try{ await fetch("/grvt/stop",{method:"POST"}); $("g-msg").textContent="stopped"; loadGrvt(); }catch(e){} });
-$("g-back").addEventListener("click", async ()=>{
-  const body={pair:$("g-pair").value,lower:Number($("g-lower").value),upper:Number($("g-upper").value),levels:Number($("g-levels").value),capital:Number($("g-capital").value),timeframe:"1h",limit:168};
-  $("g-msg").textContent="backtesting…"; $("g-bt").innerHTML='<div class="empty">running 7-day backtest…</div>';
-  try{
-    const r=await fetch("/grvt/backtest",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-    if(!r.ok){ $("g-bt").innerHTML=`<div class="empty">backtest error: ${(await r.json()).detail}</div>`; $("g-msg").textContent=""; return; }
-    const b=await r.json(); $("g-msg").textContent="";
-    const up=b.net_profit>=0;
-    $("g-bt").innerHTML=`<div class="navlabel" style="padding:0 0 8px">Backtest · ${b.pair} · ${b.days}d · ${b.candles} candles</div>
-      <div class="statgrid">
-        <div class="sbox"><div class="l">Net profit</div><div class="v mono" style="color:${up?'var(--green)':'var(--red)'}">${money(b.net_profit)}</div></div>
-        <div class="sbox"><div class="l">ROI</div><div class="v mono" style="color:${up?'var(--green)':'var(--red)'}">${b.roi_pct}%</div></div>
-        <div class="sbox"><div class="l">Round trips</div><div class="v mono">${b.round_trips}</div></div>
-      </div>
-      <div class="statgrid" style="margin-top:8px">
-        <div class="sbox"><div class="l">Max drawdown</div><div class="v mono" style="color:var(--red)">${b.max_drawdown_pct}%</div></div>
-        <div class="sbox"><div class="l">Fees</div><div class="v mono">${money(b.fees)}</div></div>
-        <div class="sbox"><div class="l">Profit factor</div><div class="v mono">${b.profit_factor}</div></div>
-      </div>
-      <div class="px" style="margin-top:8px">Simulated grid over real ${b.timeframe} candles. Past performance ≠ future.</div>`;
-  }catch(e){ $("g-bt").innerHTML='<div class="empty">backtest failed</div>'; $("g-msg").textContent=""; }
-});
-setInterval(()=>{ if(!$("view-grvt").classList.contains("hidden")) loadGrvt(); }, 8000);
 
 // ---- update button ----
 $("btn-update").addEventListener("click", async ()=>{
