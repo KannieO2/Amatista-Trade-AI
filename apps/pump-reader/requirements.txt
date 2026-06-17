@@ -4,3 +4,5 @@ pydantic==2.10.4
 ccxt==4.5.58
 httpx==0.28.1
 python-dotenv==1.0.1
+itsdangerous==2.2.0
+python-multipart==0.0.20

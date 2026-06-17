@@ -23,9 +23,13 @@ from dotenv import load_dotenv
 # read these at import time (store, executor, velocity, …).
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
+
+from .auth import (
+    COOKIE, LOGIN_HTML, MAX_AGE, auth_enabled, check_credentials, make_token, valid_token,
+)
 
 from . import store
 from .account import real_balances
@@ -319,6 +323,44 @@ def _apply_learning(quality: str) -> None:
 
 
 app = FastAPI(title="TradeOS AI Pump Reader", version="0.4.0", lifespan=lifespan)
+
+_PUBLIC_PATHS = {"/login", "/logout", "/health"}
+
+
+@app.middleware("http")
+async def _auth_gate(request: Request, call_next):
+    """Require login for everything once APP_PASSWORD is set (off in dev/paper)."""
+    if not auth_enabled():
+        return await call_next(request)
+    path = request.url.path
+    if path in _PUBLIC_PATHS or path.startswith("/grid"):
+        return await call_next(request)
+    if valid_token(request.cookies.get(COOKIE)):
+        return await call_next(request)
+    if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+        return RedirectResponse("/login", status_code=303)
+    return JSONResponse({"detail": "authentication required"}, status_code=401)
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page() -> str:
+    return LOGIN_HTML.replace("<!--ERR-->", "")
+
+
+@app.post("/login")
+async def login_submit(username: str = Form(...), password: str = Form(...)):
+    if check_credentials(username, password):
+        resp = RedirectResponse("/", status_code=303)
+        resp.set_cookie(COOKIE, make_token(username), max_age=MAX_AGE, httponly=True, samesite="lax")
+        return resp
+    return HTMLResponse(LOGIN_HTML.replace("<!--ERR-->", "Invalid username or password"), status_code=401)
+
+
+@app.get("/logout")
+async def logout():
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(COOKIE)
+    return resp
 
 
 def _record_learning_raw(symbol: str, action: str, mode: str, pump_score: int, classification: str, detail: str) -> None:

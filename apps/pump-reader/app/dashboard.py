@@ -230,7 +230,7 @@ DASHBOARD_HTML = r"""<!doctype html>
         <button class="pill" id="btn-balance">Balance <b id="tb-balance" class="mono">$0.0K</b></button>
         <span class="pill">PNL 7D <b id="tb-pnl" class="mono">+$0.00</b></span>
         <span class="pill live green"><span class="ldot"></span>Live</span>
-        <span class="pill">Logout</span>
+        <a class="pill" href="/logout" style="text-decoration:none">Logout</a>
       </div>
     </header>
 
