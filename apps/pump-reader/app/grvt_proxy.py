@@ -42,7 +42,13 @@ WS_BACKEND = "ws://127.0.0.1:3848"
 # up (so the backend replies identity and httpx hands us decoded bytes) and
 # content-encoding/length on the way down (Response recomputes the length).
 _REQ_STRIP = {"host", "content-length", "connection", "accept-encoding", "transfer-encoding"}
-_RESP_STRIP = {"content-encoding", "content-length", "transfer-encoding", "connection", "keep-alive"}
+# Also drop x-frame-options so the dashboard can be iframed by the TradeOS page.
+# We own the embedding concern here (in-repo) instead of patching the upstream
+# Node bot, so a vanilla GRVTBot clone works behind this proxy unmodified.
+_RESP_STRIP = {
+    "content-encoding", "content-length", "transfer-encoding", "connection",
+    "keep-alive", "x-frame-options",
+}
 
 _client: httpx.AsyncClient | None = None
 
