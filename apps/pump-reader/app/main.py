@@ -52,6 +52,7 @@ from .risk import RiskGuard
 from .scanner import ScannedCandidate, fetch_token_detail, forensic_check, scan_markets
 from .velocity import VelocityWatcher, watch_list_from_scores
 from .learning import LearningLab
+from .user_bot import PAPER_BALANCE, UserBot, all_bots, default_allocation, ensure_bots, get_bot
 
 logger = logging.getLogger("pump-reader")
 
@@ -150,10 +151,11 @@ class ActResponse(BaseModel):
 # step; until DATABASE_URL is wired this is the source of truth).
 _candidates: dict[str, TokenCandidate] = {}
 
-# Execution layer (paper by default) + risk guard + learning ledger + exits.
-_guard = RiskGuard()
-_engine = ExecutionEngine(_guard)
-_pm = PositionManager()
+# Per-user trading state — each account is its OWN bot (balance, positions, risk,
+# equity, P&L) and lives in the user_bot registry (get_bot / all_bots). The owner
+# is the default tenant ("owner"). Everything below stays GLOBAL — the shared
+# brain that every account's bot consumes.
+OWNER_UID = "owner"
 _learning: list[LearningRecord] = []
 _last_scan_at: datetime | None = None
 
@@ -164,16 +166,6 @@ AUTO_ENTRY_USD = float(os.getenv("PUMP_AUTO_ENTRY_USD", "100"))
 # Adaptive confirmation threshold — the learning loop lowers it after late
 # entries (be more sensitive to early moves) and raises it after false starts.
 _adaptive_threshold = float(WAITING_CONFIRMATION_THRESHOLD)
-
-# Paper account state for the dashboard equity curve / balance widgets.
-PAPER_BALANCE = float(os.getenv("PUMP_PAPER_BALANCE", "1000"))
-_equity_history: list[dict] = []
-
-# Capital allocation: bot total + per-exchange split (% of effective equity).
-_allocation: dict = {
-    "bot_total_usdt": PAPER_BALANCE,
-    "splits": {"mexc": 100.0, "bitget": 0.0},
-}
 
 # GRVTBot grid-trading section (separate product). Paper grid engine modeled on
 # github.com/kmanus88/GRVTBot. Live GRVT execution needs the user's GRVT keys.
@@ -186,9 +178,6 @@ _velocity = VelocityWatcher()
 # precision/recall) and proposes threshold tweaks once outcomes settle.
 _lab = LearningLab()
 
-# Cached real account balance (only populated when the user's read-only keys are
-# set). Until then the dashboard shows the paper balance.
-_real_account: dict = {"has_keys": False, "total_usdt": 0.0, "connected": [], "snapshots": []}
 # Real-account snapshot cadence (seconds). Only runs when keys are present.
 ACCOUNT_POLL_SECONDS = int(os.getenv("PUMP_ACCOUNT_POLL_SECONDS", "120"))
 
@@ -295,17 +284,19 @@ async def _grid_sync_loop() -> None:
 
 
 async def _monitor_loop() -> None:
-    """Tick every open managed position against a live price and run exits."""
+    """Tick every open managed position against a live price and run exits, for
+    every user's bot (each account's positions are isolated)."""
     while True:
         try:
-            for key, pos in list(_pm.positions.items()):
-                if pos.closed:
-                    continue
-                price = await fetch_price(pos.symbol, pos.exchange)
-                if price <= 0:
-                    continue
-                for event in _pm.step(key, price):
-                    await _handle_exit(pos, event)
+            for bot in all_bots():
+                for key, pos in list(bot.pm.positions.items()):
+                    if pos.closed:
+                        continue
+                    price = await fetch_price(pos.symbol, pos.exchange)
+                    if price <= 0:
+                        continue
+                    for event in bot.pm.step(key, price):
+                        await _handle_exit(bot, pos, event)
             # Learning lab: track each alerted token's MFE/MAE/lead time vs live
             # price so we can tell whether alerts fire BEFORE the pump.
             for exch, sym in _lab.active_symbols():
@@ -332,14 +323,15 @@ async def _velocity_loop() -> None:
                     continue
                 if not (AUTO_ENTRY and current_mode() == ExecMode.paper):
                     continue
-                if _pm.has(t.exchange, t.symbol):
-                    continue
                 candidate.last_price = t.price  # fire at the fresh trigger price
                 _record_learning(
                     candidate.symbol, "velocity_trigger", "paper", candidate,
                     f"vol accel {t.accel:.1f}x @ {t.price}",
                 )
-                await _auto_enter(candidate, accel=t.accel)
+                # Every user's bot enters independently (skip ones already in it).
+                for bot in all_bots():
+                    if not bot.pm.has(t.exchange, t.symbol):
+                        await _auto_enter(bot, candidate, accel=t.accel)
         except Exception as exc:
             logger.exception("velocity loop failed")
             await notify.send_error("Velocity loop", repr(exc))
@@ -347,25 +339,28 @@ async def _velocity_loop() -> None:
 
 
 async def _account_loop() -> None:
-    """Refresh the real read-only account balance when the user's keys exist.
-    No keys → does nothing (paper balance stays). Never trades, read-only."""
-    global _real_account
+    """Refresh the real read-only account balance when the owner's keys exist.
+    No keys → does nothing (paper balance stays). Never trades, read-only. Keys
+    are a single env set today, so this populates the owner bot only."""
     while True:
         try:
             acct = await real_balances()
             if acct.get("has_keys"):
-                _real_account = acct
+                get_bot(OWNER_UID).real_account = acct
                 for snap in acct.get("snapshots", []):
-                    await store.insert_account_snapshot(snap)
+                    await store.insert_account_snapshot({**snap, "user_id": OWNER_UID})
         except Exception as exc:
             logger.exception("account loop failed")
             await notify.send_error("Account loop", repr(exc))
         await asyncio.sleep(ACCOUNT_POLL_SECONDS)
 
 
-async def _persist_position(pos) -> None:
+async def _persist_position(bot: UserBot, pos) -> None:
     await store.upsert_position({
-        "key": _pm.key(pos.exchange, pos.symbol),
+        # key carries the uid so two users holding the same symbol don't collide
+        # on the unique(key) constraint; in-memory each bot keys by exchange:symbol.
+        "key": f"{bot.uid}:{pos.exchange}:{pos.symbol}",
+        "user_id": bot.uid,
         "symbol": pos.symbol, "exchange": pos.exchange,
         "entry_price": pos.entry_price, "qty": round(pos.qty, 8),
         "initial_qty": round(pos.initial_qty, 8), "phase": pos.phase,
@@ -376,60 +371,58 @@ async def _persist_position(pos) -> None:
     })
 
 
-def _open_count() -> int:
-    """Live OPEN managed positions (drives the max-open-trades risk cap)."""
-    return sum(1 for p in list(_pm.positions.values()) if not p.closed)
-
-
 async def _restore_positions() -> None:
-    """Rebuild open positions from Supabase on startup so Phase 1/2 context isn't
-    lost across restarts (Sync_State_on_Startup)."""
+    """Rebuild every user's open positions + equity curve from Supabase on startup
+    so Phase 1/2 context and balances survive a restart (Sync_State_on_Startup)."""
     if not store.enabled():
         return
-    rows = await store.list_open_positions()
-    restored = 0
-    for r in rows:
+    # One bot per known account: the owner plus every app_users row.
+    uids = [OWNER_UID] + [u["id"] for u in auth_mod.list_users() if u.get("id") and not u.get("owner")]
+    ensure_bots(uids)
+    total = 0
+    for bot in all_bots():
+        rows = await store.list_open_positions(user_id=bot.uid)
+        for r in rows:
+            try:
+                entry_at = datetime.fromisoformat(r["entry_at"]) if r.get("entry_at") else datetime.now(UTC)
+                pos = ManagedPosition(
+                    symbol=r["symbol"], exchange=r["exchange"],
+                    entry_price=float(r["entry_price"]), qty=float(r["qty"]),
+                    initial_qty=float(r.get("initial_qty") or r["qty"]),
+                    entry_at=entry_at,
+                    peak_price=float(r.get("peak_price") or r["entry_price"]),
+                    peak_at=datetime.now(UTC),
+                    phase=int(r.get("phase") or 1),
+                    realized_pnl=float(r.get("realized_pnl") or 0.0),
+                    last_price=float(r.get("last_price") or r["entry_price"]),
+                    pump_score=int(r.get("pump_score") or 0),
+                    classification=r.get("classification") or "n/a",
+                )
+                bot.pm.positions[bot.pm.key(pos.exchange, pos.symbol)] = pos
+                total += 1
+            except Exception:
+                logger.exception("restore position failed for row %s", r)
+        # Rehydrate this bot's equity curve so the chart isn't blank after restart.
         try:
-            entry_at = datetime.fromisoformat(r["entry_at"]) if r.get("entry_at") else datetime.now(UTC)
-            pos = ManagedPosition(
-                symbol=r["symbol"], exchange=r["exchange"],
-                entry_price=float(r["entry_price"]), qty=float(r["qty"]),
-                initial_qty=float(r.get("initial_qty") or r["qty"]),
-                entry_at=entry_at,
-                peak_price=float(r.get("peak_price") or r["entry_price"]),
-                peak_at=datetime.now(UTC),
-                phase=int(r.get("phase") or 1),
-                realized_pnl=float(r.get("realized_pnl") or 0.0),
-                last_price=float(r.get("last_price") or r["entry_price"]),
-                pump_score=int(r.get("pump_score") or 0),
-                classification=r.get("classification") or "n/a",
-            )
-            _pm.positions[_pm.key(pos.exchange, pos.symbol)] = pos
-            restored += 1
+            pts = await store.list_equity(200, user_id=bot.uid)
+            if pts:
+                bot.equity_history.clear()
+                bot.equity_history.extend({"t": p.get("t"), "v": float(p.get("v") or 0)} for p in pts)
         except Exception:
-            logger.exception("restore position failed for row %s", r)
-    if restored:
-        logger.info("restored %d open positions from supabase", restored)
-        await notify.send_system(f"🔄 <b>Estado recuperado</b> · {restored} posiciones abiertas reconstruidas")
-    # Rehydrate the equity curve so the chart isn't blank after a restart.
-    try:
-        pts = await store.list_equity(200)
-        if pts:
-            _equity_history.clear()
-            _equity_history.extend({"t": p.get("t"), "v": float(p.get("v") or 0)} for p in pts)
-            logger.info("restored %d equity points", len(pts))
-    except Exception:
-        logger.exception("equity restore failed")
+            logger.exception("equity restore failed for %s", bot.uid)
+    if total:
+        logger.info("restored %d open positions across %d bots", total, len(all_bots()))
+        await notify.send_system(f"🔄 <b>Estado recuperado</b> · {total} posiciones abiertas reconstruidas")
 
 
-async def _handle_exit(pos, event) -> None:
+async def _handle_exit(bot: UserBot, pos, event) -> None:
     pct = round(event.fraction * 100)
     _record_learning_raw(
         pos.symbol, f"exit_{event.reason}", "paper", pos.pump_score, pos.classification,
         f"sold {pct}% @ {event.price} pnl {event.pnl:+.2f}",
     )
-    await store.insert_exit(event.__dict__)
-    await _persist_position(pos)
+    await store.insert_exit({**event.__dict__, "user_id": bot.uid})
+    await _persist_position(bot, pos)
     await store.insert_bot_log(
         "PUMP_SCANNER",
         "PANIC_SELL" if event.reason in ("dump", "hard_stop") else "TRADE_SELL",
@@ -440,7 +433,7 @@ async def _handle_exit(pos, event) -> None:
         # Full close → close card with overall PnL%.
         cost = pos.entry_price * pos.initial_qty
         pnl_pct = (pos.realized_pnl / cost * 100) if cost > 0 else 0.0
-        quality = _pm.entry_quality(pos)
+        quality = bot.pm.entry_quality(pos)
         _record_learning_raw(
             pos.symbol, "trade_closed", "paper", pos.pump_score, pos.classification,
             f"realized {pos.realized_pnl:+.2f} · entry {quality}",
@@ -636,6 +629,9 @@ async def admin_create_user(username: str = Form(...), password: str = Form(...)
         created = await auth_mod.create_user(username, password, role)
     except ValueError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    # Spin up the new account's bot now so the scan/monitor loops include it.
+    if created.get("id"):
+        get_bot(created["id"])
     return JSONResponse({"ok": True, "user": created})
 
 
@@ -823,8 +819,9 @@ def _scan_exchanges() -> list[str]:
     return [e.strip().lower() for e in raw.split(",") if e.strip()]
 
 
-async def _auto_enter(candidate: TokenCandidate, accel: float | None = None) -> None:
-    """Paper-only auto buy on a confirmed candidate; hand it to the exit engine.
+async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | None = None) -> None:
+    """Paper-only auto buy on a confirmed candidate into ONE user's bot; hand it
+    to that bot's exit engine.
 
     Runs the ForensicFilter gate first (real CEX-sourced spread/liquidity/book
     checks). A blocked candidate is logged and skipped — never bought."""
@@ -842,19 +839,19 @@ async def _auto_enter(candidate: TokenCandidate, accel: float | None = None) -> 
         logger.info("forensic block %s: %s", candidate.symbol, reasons)
         return
 
-    result = await _engine.act(
+    result = await bot.engine.act(
         symbol=candidate.symbol, side=Side.buy, reference_price=candidate.last_price,
         capital_usd=AUTO_ENTRY_USD, exchanges=[candidate.exchange],
-        open_trades=_open_count(),
+        open_trades=bot.open_count(),
     )
     for fill in result.fills:
-        _pm.open(
+        bot.pm.open(
             symbol=fill.symbol, exchange=fill.exchange, entry_price=fill.fill_price,
             qty=fill.amount, pump_score=candidate.pump_score, classification=candidate.classification,
         )
-        opened = _pm.positions.get(_pm.key(fill.exchange, fill.symbol))
+        opened = bot.pm.positions.get(bot.pm.key(fill.exchange, fill.symbol))
         if opened:
-            await _persist_position(opened)
+            await _persist_position(bot, opened)
         _record_learning(candidate.symbol, "auto_entry", "paper", candidate, f"bought ${AUTO_ENTRY_USD:.0f} @ {fill.fill_price}")
         await store.insert_bot_log(
             "PUMP_SCANNER", "TRADE_BUY",
@@ -939,8 +936,11 @@ async def _perform_scan(min_pump_score: int = 1) -> ScanResponse:
                     "liquidity_usd": candidate.liquidity_usd,
                 },
             )
-            if AUTO_ENTRY and current_mode() == ExecMode.paper and not _pm.has(candidate.exchange, candidate.symbol):
-                await _auto_enter(candidate)
+            if AUTO_ENTRY and current_mode() == ExecMode.paper:
+                # Each user's bot enters independently (own balance/caps).
+                for bot in all_bots():
+                    if not bot.pm.has(candidate.exchange, candidate.symbol):
+                        await _auto_enter(bot, candidate)
     # Cross-exchange arbitrage detection (alert-only in paper).
     try:
         await _arbitrage_scan()
@@ -970,12 +970,12 @@ async def _perform_scan(min_pump_score: int = 1) -> ScanResponse:
         )
     except Exception:
         logger.exception("velocity sync failed")
-    # Mark equity (real account total when keys exist, else paper balance).
-    equity_v = _real_account["total_usdt"] if _real_account.get("has_keys") else _paper_equity()
-    point = {"t": _last_scan_at.isoformat(), "v": equity_v}
-    _equity_history.append(point)
-    del _equity_history[:-200]
-    await store.insert_equity(point)
+    # Mark equity per user (live total when that bot has keys, else paper).
+    for bot in all_bots():
+        point = {"t": _last_scan_at.isoformat(), "v": bot.balance()}
+        bot.equity_history.append(point)
+        del bot.equity_history[:-200]
+        await store.insert_equity({**point, "user_id": bot.uid})
     ranked = sorted(_candidates.values(), key=lambda c: c.pump_score, reverse=True)
     return ScanResponse(scanned_at=_last_scan_at, count=len(ranked), candidates=ranked)
 
@@ -986,7 +986,8 @@ async def dashboard() -> str:
 
 
 @app.get("/status")
-async def status() -> dict:
+async def status(request: Request) -> dict:
+    bot = _req_bot(request)
     return {
         "service": "pump-reader",
         "exec_mode": os.getenv("PUMP_EXEC_MODE", "paper"),
@@ -994,26 +995,27 @@ async def status() -> dict:
         "exchanges": _scan_exchanges(),
         "last_scan_at": _last_scan_at.isoformat() if _last_scan_at else None,
         "candidate_count": len(_candidates),
-        "kill_switch_active": _guard.kill_switch,
-        "open_positions": _open_count(),
+        "kill_switch_active": bot.guard.kill_switch,
+        "open_positions": bot.open_count(),
         "persistence": "supabase" if store.enabled() else "memory",
-        "account_connected": _real_account.get("connected", []),
+        "account_connected": bot.real_account.get("connected", []),
     }
 
 
 @app.get("/account")
-async def account() -> dict:
-    """Real read-only balance (only when the user's keys are set), else paper."""
-    global _real_account
-    acct = await real_balances()
+async def account(request: Request) -> dict:
+    """Real read-only balance (only when the owner's keys are set), else this
+    user's paper balance."""
+    bot = _req_bot(request)
+    acct = await real_balances() if bot.uid == OWNER_UID else {"has_keys": False}
     if acct.get("has_keys"):
-        _real_account = acct
+        bot.real_account = acct
         for snap in acct.get("snapshots", []):
-            await store.insert_account_snapshot(snap)
+            await store.insert_account_snapshot({**snap, "user_id": bot.uid})
         return {**acct, "source": "live_account"}
     return {
-        "has_keys": False, "source": "paper", "total_usdt": _paper_equity(),
-        "allocated_usdt": float(_allocation.get("bot_total_usdt") or PAPER_BALANCE),
+        "has_keys": False, "source": "paper", "total_usdt": bot.paper_equity(),
+        "allocated_usdt": float(bot.allocation.get("bot_total_usdt") or PAPER_BALANCE),
         "connected": [], "snapshots": [],
         "note": "No exchange keys set. Add read-only spot keys (no withdrawal) to env to show your real balance.",
     }
@@ -1056,44 +1058,16 @@ def _ago(dt: datetime) -> str:
     return f"{int(secs // 3600)}h"
 
 
-def _pnl_7d() -> float:
-    """Paper/live P&L over the last 7 days: realized exits (7d) + open unrealized.
-
-    Makes demo gains visible — every value comes from real managed positions
-    priced against the live market, nothing invented.
-    """
-    cutoff = datetime.now(UTC).timestamp() - 7 * 86400
-    realized = 0.0
-    for e in _pm.history:
-        try:
-            ts = datetime.fromisoformat(e.at).timestamp()
-        except Exception:
-            ts = cutoff  # undated event → still count it
-        if ts >= cutoff:
-            realized += e.pnl
-    unrealized = sum(
-        (p.last_price - p.entry_price) * p.qty
-        for p in _pm.positions.values()
-        if not p.closed and p.last_price > 0
-    )
-    return round(realized + unrealized, 2)
-
-
-def _paper_equity() -> float:
-    """Paper balance = capital you allocated (bot total) + demo gains. Driven by
-    the allocation modal, so adding capital updates the balance immediately."""
-    base = float(_allocation.get("bot_total_usdt") or PAPER_BALANCE)
-    realized = sum(e.pnl for e in _pm.history)
-    unrealized = sum(
-        (p.last_price - p.entry_price) * p.qty
-        for p in _pm.positions.values()
-        if not p.closed and p.last_price > 0
-    )
-    return round(base + realized + unrealized, 2)
+def _req_bot(request: Request) -> UserBot:
+    """The UserBot for the logged-in account (set by _auth_gate). Per-user P&L,
+    balance and equity helpers live on the bot (see user_bot.py)."""
+    uid = (getattr(request.state, "user", None) or {}).get("id") or OWNER_UID
+    return get_bot(uid)
 
 
 @app.get("/overview")
-async def overview() -> dict:
+async def overview(request: Request) -> dict:
+    bot = _req_bot(request)
     ranked = sorted(_candidates.values(), key=lambda c: c.pump_score, reverse=True)
     top = ranked[0] if ranked else None
     alerts = [c for c in ranked if c.status == CandidateStatus.waiting_confirmation]
@@ -1118,13 +1092,13 @@ async def overview() -> dict:
             "classic": _cluster_stats("classic"),
             "long_pump": _cluster_stats("long_pump"),
         },
-        "open_positions": _open_count(),
-        "balance": _real_account["total_usdt"] if _real_account.get("has_keys") else _paper_equity(),
-        "balance_source": "live_account" if _real_account.get("has_keys") else "paper",
-        "account_connected": _real_account.get("connected", []),
+        "open_positions": bot.open_count(),
+        "balance": bot.balance(),
+        "balance_source": "live_account" if bot.real_account.get("has_keys") else "paper",
+        "account_connected": bot.real_account.get("connected", []),
         "persistence": "supabase" if store.enabled() else "memory",
-        "pnl_7d": _pnl_7d(),
-        "equity_curve": _equity_history,
+        "pnl_7d": bot.pnl_7d(),
+        "equity_curve": bot.equity_history,
         "table": [
             {
                 "cluster": c.cluster,
@@ -1155,22 +1129,24 @@ class AllocationRequest(BaseModel):
 
 
 @app.get("/allocation")
-async def get_allocation() -> dict:
-    total_pct = round(sum(_allocation["splits"].values()), 2)
-    return {**_allocation, "sum_pct": total_pct, "valid": abs(total_pct - 100.0) < 0.01}
+async def get_allocation(request: Request) -> dict:
+    bot = _req_bot(request)
+    total_pct = round(sum(bot.allocation["splits"].values()), 2)
+    return {**bot.allocation, "sum_pct": total_pct, "valid": abs(total_pct - 100.0) < 0.01}
 
 
 @app.post("/allocation")
-async def set_allocation(req: AllocationRequest) -> dict:
+async def set_allocation(req: AllocationRequest, request: Request) -> dict:
+    bot = _req_bot(request)
     total_pct = round(sum(req.splits.values()), 2)
     if abs(total_pct - 100.0) >= 0.01:
         raise HTTPException(status_code=400, detail=f"splits must sum to 100% (got {total_pct}%)")
-    _allocation["bot_total_usdt"] = req.bot_total_usdt
-    _allocation["splits"] = {k.lower(): float(v) for k, v in req.splits.items()}
+    bot.allocation["bot_total_usdt"] = req.bot_total_usdt
+    bot.allocation["splits"] = {k.lower(): float(v) for k, v in req.splits.items()}
     await store.upsert_allocation({
-        "bot_total_usdt": _allocation["bot_total_usdt"], "splits": _allocation["splits"],
-    })
-    return {**_allocation, "sum_pct": total_pct, "valid": True}
+        "bot_total_usdt": bot.allocation["bot_total_usdt"], "splits": bot.allocation["splits"],
+    }, user_id=bot.uid)
+    return {**bot.allocation, "sum_pct": total_pct, "valid": True}
 
 
 class GridConfigRequest(BaseModel):
@@ -1255,7 +1231,8 @@ async def run_scan(min_pump_score: int = 1) -> ScanResponse:
 
 
 @app.post("/act", response_model=ActResponse)
-async def act_on_candidate(symbol: str, capital_usd: float = 100.0, exchange: str | None = None) -> ActResponse:
+async def act_on_candidate(request: Request, symbol: str, capital_usd: float = 100.0, exchange: str | None = None) -> ActResponse:
+    bot = _req_bot(request)
     symbol_u = symbol.upper()
     matches = [c for c in _candidates.values() if c.symbol == symbol_u]
     if exchange:
@@ -1264,23 +1241,23 @@ async def act_on_candidate(symbol: str, capital_usd: float = 100.0, exchange: st
         raise HTTPException(status_code=404, detail="candidate not found; run /scan first")
     candidate = max(matches, key=lambda c: c.pump_score)
 
-    result = await _engine.act(
+    result = await bot.engine.act(
         symbol=candidate.symbol,
         side=Side.buy,
         reference_price=candidate.last_price,
         capital_usd=capital_usd,
         exchanges=[candidate.exchange],
-        open_trades=_open_count(),
+        open_trades=bot.open_count(),
     )
 
     for fill in result.fills:
-        _pm.open(
+        bot.pm.open(
             symbol=fill.symbol, exchange=fill.exchange, entry_price=fill.fill_price,
             qty=fill.amount, pump_score=candidate.pump_score, classification=candidate.classification,
         )
-        opened = _pm.positions.get(_pm.key(fill.exchange, fill.symbol))
+        opened = bot.pm.positions.get(bot.pm.key(fill.exchange, fill.symbol))
         if opened:
-            await _persist_position(opened)
+            await _persist_position(bot, opened)
 
     detail = (
         f"{len(result.fills)} fills, {len(result.rejected)} rejected"
@@ -1299,12 +1276,14 @@ async def act_on_candidate(symbol: str, capital_usd: float = 100.0, exchange: st
 
 
 @app.get("/positions")
-async def list_positions() -> list[dict]:
-    return [fill.__dict__ | {"side": fill.side.value, "mode": fill.mode.value} for fill in _engine.positions]
+async def list_positions(request: Request) -> list[dict]:
+    bot = _req_bot(request)
+    return [fill.__dict__ | {"side": fill.side.value, "mode": fill.mode.value} for fill in bot.engine.positions]
 
 
 @app.get("/managed")
-async def list_managed() -> dict:
+async def list_managed(request: Request) -> dict:
+    bot = _req_bot(request)
     open_positions = [
         {
             "symbol": p.symbol,
@@ -1320,12 +1299,12 @@ async def list_managed() -> dict:
             "realized_pnl": round(p.realized_pnl, 4),
             "unrealized_pnl": round((p.last_price - p.entry_price) * p.qty, 4),
         }
-        for p in _pm.positions.values()
+        for p in bot.pm.positions.values()
         if not p.closed
     ]
     return {
         "open": open_positions,
-        "exits": [e.__dict__ for e in reversed(_pm.history[-20:])],
+        "exits": [e.__dict__ for e in reversed(bot.pm.history[-20:])],
         "adaptive_threshold": round(_adaptive_threshold, 1),
         "auto_entry": AUTO_ENTRY,
     }
@@ -1385,10 +1364,11 @@ async def update_settings(req: SettingsRequest) -> dict:
 
 
 @app.get("/pnl/breakdown")
-async def pnl_breakdown() -> dict:
+async def pnl_breakdown(request: Request) -> dict:
     """Per-token P&L over the last 7d: realized exits + open unrealized, so the
     PNL 7D widget can show which tokens are winning/losing. All from real managed
     positions — nothing invented."""
+    bot = _req_bot(request)
     cutoff = datetime.now(UTC).timestamp() - 7 * 86400
     by: dict[str, dict] = {}
 
@@ -1399,7 +1379,7 @@ async def pnl_breakdown() -> dict:
             "realized": 0.0, "unrealized": 0.0, "trades": 0, "open": False,
         })
 
-    for e in _pm.history:
+    for e in bot.pm.history:
         try:
             ts = datetime.fromisoformat(e.at).timestamp()
         except Exception:
@@ -1409,7 +1389,7 @@ async def pnl_breakdown() -> dict:
         d = _row(e.exchange, e.symbol)
         d["realized"] += e.pnl
         d["trades"] += 1
-    for p in list(_pm.positions.values()):
+    for p in list(bot.pm.positions.values()):
         if p.closed or p.last_price <= 0:
             continue
         d = _row(p.exchange, p.symbol)
@@ -1428,7 +1408,7 @@ async def pnl_breakdown() -> dict:
         "winners": sum(1 for r in rows if r["total"] > 0),
         "losers": sum(1 for r in rows if r["total"] < 0),
         "total": round(sum(r["total"] for r in rows), 2),
-        "pnl_7d": _pnl_7d(),
+        "pnl_7d": bot.pnl_7d(),
     }
 
 
@@ -1456,6 +1436,7 @@ async def report_missed(req: MissedPumpRequest) -> dict:
 
 
 @app.post("/risk/kill-switch")
-async def set_kill_switch(active: bool, reason: str = "manual") -> dict:
-    _guard.set_kill_switch(active, reason)
-    return {"kill_switch_active": _guard.kill_switch, "reason": _guard.kill_reason}
+async def set_kill_switch(request: Request, active: bool, reason: str = "manual") -> dict:
+    bot = _req_bot(request)
+    bot.guard.set_kill_switch(active, reason)
+    return {"kill_switch_active": bot.guard.kill_switch, "reason": bot.guard.kill_reason}
