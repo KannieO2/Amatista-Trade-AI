@@ -578,8 +578,10 @@ async def _auth_gate(request: Request, call_next):
             return RedirectResponse("/login", status_code=303)
         return JSONResponse({"detail": "authentication required"}, status_code=401)
     request.state.user = user
-    # Admin-only areas: user management and the single-account grid bot.
-    if (path.startswith("/admin") or path.startswith("/grid")) and user.get("role") != "admin":
+    # Admin-only area: account management. The grid is per-user (each TradeOS
+    # account maps to its own GRVTBot user → its own isolated grids), so any
+    # logged-in user reaches /grid and only sees their own grids.
+    if path.startswith("/admin") and user.get("role") != "admin":
         if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
             return HTMLResponse(
                 "<body style='font-family:system-ui;background:#070a0f;color:#e6e9ef;"
@@ -657,50 +659,71 @@ async def admin_page() -> str:
     return ADMIN_USERS_HTML
 
 
-_grid_token_cache: str | None = None
-_grid_token_at: float = 0.0
+# Per-user grid JWT cache: uid -> (token, minted_at). The embedded GRVTBot is a
+# single Node process but is multi-tenant natively (grid_bots are scoped by
+# user_id, enforced server-side via the JWT), so each TradeOS account maps to its
+# OWN GRVTBot user → its own isolated grids. No process-per-user needed.
+_grid_token_cache: dict[str, tuple[str, float]] = {}
+
+
+def _grid_creds(user: dict) -> tuple[str, str]:
+    """Deterministic GRVTBot email + password for a TradeOS user, derived from
+    the user id + the app secret. Stable across restarts (so we can re-login
+    without storing a second password) and unguessable from outside."""
+    import hashlib
+    import hmac
+
+    uid = str((user or {}).get("id") or "owner")
+    email = f"{uid}@tradeos.local"
+    secret = os.getenv("APP_SECRET_KEY", "tradeos-dev-secret-change-me").encode()
+    pw = "G" + hmac.new(secret, uid.encode(), hashlib.sha256).hexdigest()[:24]  # >=8 chars
+    return email, pw
 
 
 @app.get("/grid-sso")
-async def grid_sso():
-    """Single sign-on for the embedded GRVTBot.
+async def grid_sso(request: Request):
+    """Single sign-on for the embedded GRVTBot, scoped to the logged-in user.
 
-    The TradeOS login is the only login the user sees. This route (gated by the
-    auth middleware) logs into the GRVTBot with owner credentials server-side
-    and returns the JWT so the iframe SPA boots already authenticated. The owner
-    password never reaches the browser.
-
-    The minted token (GRVT JWT, 24h) is cached and reused for 12h so repeated
-    grid opens don't trip the bot's login rate-limiter.
+    The TradeOS login is the only login the user sees. This route logs the
+    session user into the GRVTBot server-side (auto-creating their GRVTBot
+    account on first open) and returns THAT user's JWT, so the iframe SPA boots
+    showing only this person's grids. The derived grid password never reaches
+    the browser. Tokens are cached per user for 12h to avoid the login limiter.
     """
-    global _grid_token_cache, _grid_token_at
     import time
 
+    user = getattr(request.state, "user", None) or {"id": "owner"}
+    uid = str(user.get("id") or "owner")
     now = time.time()
-    if _grid_token_cache and (now - _grid_token_at) < 12 * 3600:
-        return {"ok": True, "key": "grvt-grid-token", "token": _grid_token_cache}
+    cached = _grid_token_cache.get(uid)
+    if cached and (now - cached[1]) < 12 * 3600:
+        return {"ok": True, "key": "grvt-grid-token", "token": cached[0]}
 
-    email = os.getenv("GRID_OWNER_EMAIL", "admin@tradeos.local")
-    password = os.getenv("GRID_OWNER_PASSWORD", "")
-    if not password:
-        return JSONResponse({"ok": False, "error": "GRID_OWNER_PASSWORD not set"}, status_code=500)
+    email, password = _grid_creds(user)
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 "http://127.0.0.1:3848/api/v2/auth/login",
                 json={"email": email, "password": password},
             )
+            if resp.status_code != 200:
+                # First time for this user (or no account yet): create it, then
+                # the returned token logs them straight in.
+                resp = await client.post(
+                    "http://127.0.0.1:3848/api/v2/auth/signup",
+                    json={"email": email, "password": password, "terms_lang": "es"},
+                )
     except httpx.HTTPError:
-        if _grid_token_cache:
-            return {"ok": True, "key": "grvt-grid-token", "token": _grid_token_cache, "cached": True}
+        if cached:
+            return {"ok": True, "key": "grvt-grid-token", "token": cached[0], "cached": True}
         return JSONResponse({"ok": False, "error": "grid_offline"}, status_code=502)
+
     if resp.status_code == 200:
-        _grid_token_cache = resp.json().get("token")
-        _grid_token_at = now
-        return {"ok": True, "key": "grvt-grid-token", "token": _grid_token_cache}
-    # Login throttled/failed — fall back to a still-valid cached token if we have one.
-    if _grid_token_cache:
-        return {"ok": True, "key": "grvt-grid-token", "token": _grid_token_cache, "cached": True}
+        token = resp.json().get("token")
+        _grid_token_cache[uid] = (token, now)
+        return {"ok": True, "key": "grvt-grid-token", "token": token}
+    if cached:
+        return {"ok": True, "key": "grvt-grid-token", "token": cached[0], "cached": True}
     return JSONResponse({"ok": False, "error": "grid_login_failed", "code": resp.status_code}, status_code=502)
 
 
