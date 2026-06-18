@@ -254,3 +254,23 @@ async def fetch_price(pair: str, exchange_id: str | None = None) -> float:
         return 0.0
     finally:
         await exchange.close()
+
+
+async def fetch_1m_volume(pair: str, exchange_id: str | None = None) -> float:
+    """Base volume of the last CLOSED 1-minute candle. Used by the exit monitor's
+    volume-aware time-stop: a flat move is only "dead" once its volume fades.
+    0.0 on failure (caller treats unknown volume as no-signal). The last candle
+    is still forming (partial volume), so we read the previous, fully-closed one."""
+    eid = exchange_id or GRID_PRICE_EXCHANGE
+    if not hasattr(ccxt, eid):
+        return 0.0
+    exchange = getattr(ccxt, eid)({"enableRateLimit": True})
+    try:
+        candles = await exchange.fetch_ohlcv(pair.upper(), timeframe="1m", limit=3)
+        if not candles or len(candles) < 2:
+            return 0.0
+        return float(candles[-2][5] or 0.0)  # [ts,o,h,l,c,v] of the last closed 1m
+    except Exception:
+        return 0.0
+    finally:
+        await exchange.close()

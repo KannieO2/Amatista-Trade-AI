@@ -40,7 +40,7 @@ from . import grid_sync, store
 from .account import real_balances
 from .dashboard import DASHBOARD_HTML
 from .executor import ExecMode, ExecutionEngine, Side, current_mode
-from .grid import GridBot, backtest, fetch_ohlcv_for, fetch_price
+from .grid import GridBot, backtest, fetch_1m_volume, fetch_ohlcv_for, fetch_price
 from .grvt_proxy import register_grvt_proxy
 from .market import market_for_symbol
 from . import notify
@@ -288,6 +288,10 @@ async def _monitor_loop() -> None:
     every user's bot (each account's positions are isolated)."""
     while True:
         try:
+            # One 1m-volume read per distinct symbol per pass (feeds the
+            # volume-aware time-stop). Cached so N users holding the same symbol
+            # don't refetch it. Symbol volume is global, not per-user.
+            vol_cache: dict[str, float] = {}
             for bot in all_bots():
                 for key, pos in list(bot.pm.positions.items()):
                     if pos.closed:
@@ -295,7 +299,11 @@ async def _monitor_loop() -> None:
                     price = await fetch_price(pos.symbol, pos.exchange)
                     if price <= 0:
                         continue
-                    for event in bot.pm.step(key, price):
+                    vkey = f"{pos.exchange}:{pos.symbol}"
+                    if vkey not in vol_cache:
+                        vol_cache[vkey] = await fetch_1m_volume(pos.symbol, pos.exchange)
+                    vol = vol_cache[vkey] or None
+                    for event in bot.pm.step(key, price, volume=vol):
                         await _handle_exit(bot, pos, event)
             # Learning lab: track each alerted token's MFE/MAE/lead time vs live
             # price so we can tell whether alerts fire BEFORE the pump.

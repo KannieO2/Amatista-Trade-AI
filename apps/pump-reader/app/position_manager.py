@@ -26,10 +26,18 @@ HARD_STOP_PCT = float(os.getenv("PUMP_STOP_LOSS_PCT", "8"))  # hard stop loss
 DUMP_TICK_PCT = float(os.getenv("PUMP_DUMP_TICK_PCT", "10"))  # abrupt one-tick drop = dump
 
 # Dynamic risk management.
-TIMEOUT_MINUTES = float(os.getenv("PUMP_TIMEOUT_MINUTES", "8"))    # time-stop window
+TIMEOUT_MINUTES = float(os.getenv("PUMP_TIMEOUT_MINUTES", "8"))    # earliest a faded flat move is cut
 TIMEOUT_BAND_PCT = float(os.getenv("PUMP_TIMEOUT_BAND_PCT", "3"))  # lateral = |gain| <= band
 BREAKEVEN_PCT = float(os.getenv("PUMP_BREAKEVEN_PCT", "4"))        # gain that arms break-even
 BREAKEVEN_MARGIN_PCT = float(os.getenv("PUMP_BREAKEVEN_MARGIN_PCT", "0.5"))  # SL above entry
+# Volume-aware (dynamic) time-stop: a sideways pump with LIVE volume keeps its
+# capital; only a flat move whose volume has FADED is cut. "Alive" = the latest
+# 1m volume is still >= VOLUME_ALIVE_FRAC of the peak 1m volume seen in the trade.
+VOLUME_ALIVE_FRAC = float(os.getenv("PUMP_VOLUME_ALIVE_FRAC", "0.5"))
+# When no volume signal is available, fall back to a (longer) plain time-stop.
+TIMEOUT_NO_VOL_MINUTES = float(os.getenv("PUMP_TIMEOUT_NO_VOL_MINUTES", "20"))
+# Hard backstop: cap the hold even if volume persists but price goes nowhere.
+MAX_HOLD_MINUTES = float(os.getenv("PUMP_MAX_HOLD_MINUTES", "45"))
 
 
 @dataclass
@@ -50,6 +58,8 @@ class ManagedPosition:
     classification: str = "n/a"
     be_armed: bool = False        # break-even stop activated (gain crossed BREAKEVEN_PCT)
     be_stop: float = 0.0          # break-even stop price (entry + margin)
+    peak_volume: float = 0.0      # max 1m volume seen during the trade (fuel gauge)
+    last_volume: float = 0.0      # latest 1m volume (vs peak → alive / faded)
 
 
 @dataclass
@@ -88,7 +98,7 @@ class PositionManager:
             last_price=entry_price, pump_score=pump_score, classification=classification,
         )
 
-    def step(self, key: str, price: float) -> list[ExitEvent]:
+    def step(self, key: str, price: float, volume: float | None = None) -> list[ExitEvent]:
         pos = self.positions.get(key)
         if not pos or pos.closed or price <= 0:
             return []
@@ -97,6 +107,10 @@ class PositionManager:
         if price > pos.peak_price:
             pos.peak_price = price
             pos.peak_at = datetime.now(UTC)
+        if volume is not None and volume > 0:
+            pos.last_volume = volume
+            if volume > pos.peak_volume:
+                pos.peak_volume = volume
 
         gain = (price - pos.entry_price) / pos.entry_price * 100
         drop_from_peak = (pos.peak_price - price) / pos.peak_price * 100 if pos.peak_price > 0 else 0
@@ -120,9 +134,10 @@ class PositionManager:
         if pos.be_armed and price <= pos.be_stop:
             events.append(self._sell(pos, price, 1.0, "break_even"))
             return events
-        # Time-stop: after TIMEOUT_MINUTES going nowhere (|gain| <= band), free the
-        # capital for a better setup instead of bag-holding a dead move.
-        if elapsed_min >= TIMEOUT_MINUTES and abs(gain) <= TIMEOUT_BAND_PCT:
+        # Dynamic time-stop. A flat move (|gain| <= band) is NOT cut just for being
+        # slow — only when its FUEL is gone. While 1m volume stays alive (>= frac of
+        # peak), a sideways pump keeps running; once volume fades, free the capital.
+        if self._time_stop_fires(pos, gain, elapsed_min):
             events.append(self._sell(pos, price, 1.0, "timeout"))
             return events
         # Phase 1: secure capital with a partial take-profit.
@@ -133,6 +148,27 @@ class PositionManager:
         if pos.phase == 2 and not pos.closed and drop_from_peak >= TRAIL_PCT:
             events.append(self._sell(pos, price, 1.0, "trailing"))
         return events
+
+    def _time_stop_fires(self, pos: ManagedPosition, gain: float, elapsed_min: float) -> bool:
+        """Volume-aware time-stop. Returns True only for a flat move that should be
+        cut. Logic:
+          - not lateral (|gain| > band)            -> never (let TP/trail/stop run)
+          - volume FADED + past TIMEOUT_MINUTES     -> cut (dead move)
+          - no volume data + past NO_VOL_MINUTES    -> cut (longer fallback grace)
+          - volume ALIVE                            -> hold, until MAX_HOLD backstop
+        """
+        if abs(gain) > TIMEOUT_BAND_PCT:
+            return False
+        have_vol = pos.peak_volume > 0 and pos.last_volume > 0
+        if have_vol:
+            faded = pos.last_volume < VOLUME_ALIVE_FRAC * pos.peak_volume
+            if faded and elapsed_min >= TIMEOUT_MINUTES:
+                return True            # flat + fuel gone = dead
+            if elapsed_min >= MAX_HOLD_MINUTES:
+                return True            # backstop: capped even if volume persists
+            return False               # alive volume -> keep the sideways pump
+        # No volume signal: fall back to a plain (longer) time-stop.
+        return elapsed_min >= TIMEOUT_NO_VOL_MINUTES
 
     def _sell(self, pos: ManagedPosition, price: float, fraction: float, reason: str) -> ExitEvent:
         sell_qty = pos.qty if fraction >= 1.0 else pos.qty * fraction
