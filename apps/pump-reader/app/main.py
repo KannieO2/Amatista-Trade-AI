@@ -168,6 +168,10 @@ AUTO_ENTRY_USD = float(os.getenv("PUMP_AUTO_ENTRY_USD", "100"))
 # volume spike behind scan-path entries.
 ENTRY_MAX_CHASE_PCT = float(os.getenv("PUMP_ENTRY_MAX_CHASE_PCT", "60"))
 ENTRY_MIN_VOL_SPIKE = float(os.getenv("PUMP_ENTRY_MIN_VOL_SPIKE", "2.5"))
+# Confidence floor: the scanner's confidence_score (~35 thin spike … ~95 deep
+# book + clean live move) must clear this before any auto-entry. Filters the
+# low-confidence thin-book signals that just bleed the spread.
+ENTRY_MIN_CONFIDENCE = float(os.getenv("PUMP_ENTRY_MIN_CONFIDENCE", "50"))
 # Adaptive confirmation threshold — the learning loop lowers it after late
 # entries (be more sensitive to early moves) and raises it after false starts.
 _adaptive_threshold = float(WAITING_CONFIRMATION_THRESHOLD)
@@ -880,11 +884,16 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
     """Paper-only auto buy on a confirmed candidate into ONE user's bot; hand it
     to that bot's exit engine.
 
-    Gates, in order: (1) momentum/exhaustion — don't chase a pump that already ran
-    (buying the blow-off top) and require real volume behind it; (2) ForensicFilter
-    — real CEX-sourced spread/liquidity/book checks. A blocked candidate is logged
-    and skipped — never bought."""
-    # (1) Momentum / exhaustion gate — the #1 source of "enter then time out at a
+    Gates, in order: (1) confidence floor; (2) momentum/exhaustion — don't chase a
+    pump that already ran (buying the blow-off top) and require real volume behind
+    it; (3) ForensicFilter — real CEX-sourced spread/liquidity/book checks. A
+    blocked candidate is logged and skipped — never bought."""
+    # (1) Confidence gate — only act on signals the scanner trusts.
+    if candidate.confidence_score < ENTRY_MIN_CONFIDENCE:
+        _record_learning(candidate.symbol, "skip_low_confidence", "paper", candidate,
+                         f"confianza {candidate.confidence_score} < {ENTRY_MIN_CONFIDENCE:.0f}")
+        return
+    # (2) Momentum / exhaustion gate — the #1 source of "enter then time out at a
     # small loss" churn is chasing finished or thin pumps.
     if candidate.price_change_pct_24h >= ENTRY_MAX_CHASE_PCT:
         _record_learning(candidate.symbol, "skip_exhausted", "paper", candidate,
@@ -942,15 +951,23 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
         logger.info("auto-entry rejected %s: %s", candidate.symbol, rej)
 
 
-# Cross-exchange arbitrage detection threshold (%). Detection only — executing
-# arbitrage needs funded balances on BOTH venues + live keys, so paper mode
-# alerts without trading (no fabricated cross-venue fills).
+# Cross-exchange arbitrage detection. OFF by default — it is alert-only (can't
+# execute in paper) and a wide "spread" between two CEXes is almost always a
+# stale/thin price on one venue, not real arbitrage. So it was just noise on
+# Telegram. Re-enable with PUMP_ARB_ALERTS=true if you want it.
+ARB_ALERTS = os.getenv("PUMP_ARB_ALERTS", "false").lower() == "true"
 ARB_SPREAD_PCT = float(os.getenv("PUMP_ARB_SPREAD_PCT", "1.5"))
+# Ignore absurd gaps — a >5% CEX-to-CEX gap is a data artifact (illiquid/stale
+# book), not a tradeable spread.
+ARB_MAX_SPREAD_PCT = float(os.getenv("PUMP_ARB_MAX_SPREAD_PCT", "5"))
 
 
 async def _arbitrage_scan() -> None:
-    """Same symbol on 2+ scanned exchanges with a price gap >= ARB_SPREAD_PCT →
-    alert. Real prices from the scan; no execution in paper."""
+    """Same symbol on 2+ scanned exchanges with a price gap in
+    [ARB_SPREAD_PCT, ARB_MAX_SPREAD_PCT] → alert. Real prices from the scan; no
+    execution in paper. No-op unless PUMP_ARB_ALERTS=true."""
+    if not ARB_ALERTS:
+        return
     by_symbol: dict[str, list[TokenCandidate]] = {}
     for c in _candidates.values():
         if c.last_price > 0:
@@ -963,7 +980,7 @@ async def _arbitrage_scan() -> None:
         if lo.last_price <= 0 or lo.exchange == hi.exchange:
             continue
         spread = (hi.last_price - lo.last_price) / lo.last_price * 100
-        if spread >= ARB_SPREAD_PCT:
+        if ARB_SPREAD_PCT <= spread <= ARB_MAX_SPREAD_PCT:
             await notify.send_arbitrage(sym, lo.exchange, lo.last_price, hi.exchange, hi.last_price, spread)
             await store.insert_bot_log(
                 "PUMP_SCANNER", "INFO",
