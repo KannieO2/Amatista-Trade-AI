@@ -319,6 +319,7 @@ DASHBOARD_HTML = r"""<!doctype html>
         </span>
         <span class="pill live green"><span class="ldot"></span>Live</span>
         <button class="pill icon" id="btn-theme" title="Modo claro / oscuro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
+        <a class="pill" id="link-admin" href="/admin" title="Crear y gestionar cuentas" style="text-decoration:none;display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><circle cx="9" cy="7" r="3"/><path d="M2 21v-1a6 6 0 016-6h2"/><circle cx="18" cy="16" r="3"/><path d="M18 13v.5M18 19v-.5M21 16h-.5M15 16h.5"/></svg>Cuentas</a>
         <a class="pill" href="/logout" style="text-decoration:none">Logout</a>
       </div>
     </header>
@@ -1413,6 +1414,18 @@ $("btn-theme").addEventListener("click",()=>{
   const nxt=cur==="light"?"dark":"light";
   localStorage.setItem("tradeos-theme",nxt); applyTheme(nxt);
 });
+
+// ---- current user: reveal admin-only tools (Cuentas, Grid) for admins ----
+let CURRENT_USER = null;
+async function loadMe(){
+  try{
+    const r = await fetch('/me'); CURRENT_USER = await r.json();
+    if(CURRENT_USER && CURRENT_USER.role === 'admin'){
+      const a = document.getElementById('link-admin'); if(a) a.style.display = '';
+    }
+  }catch(e){}
+}
+loadMe();
 
 // ---- boot + active-view polling ----
 const viewLoaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, settings:loadSettings, grvt:loadGrvt};

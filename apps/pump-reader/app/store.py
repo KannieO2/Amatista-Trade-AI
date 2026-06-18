@@ -147,6 +147,64 @@ async def insert_alert(alert: dict) -> None:
     await _insert("alerts", alert)
 
 
+# --- multi-user accounts (app_users) ----------------------------------------
+
+async def list_users() -> list[dict]:
+    client = await _get_client()
+    if client is None:
+        return []
+    try:
+        r = await client.get("/app_users", headers=_headers(),
+                             params={"select": "id,username,role,active,created_at", "order": "created_at.asc"})
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, list) else []
+    except Exception:
+        # password_hash is needed for auth — fetch it in a second, scoped call so
+        # the select above can stay narrow for the admin listing.
+        logger.exception("supabase read app_users failed")
+        return []
+
+
+async def list_users_with_hash() -> list[dict]:
+    client = await _get_client()
+    if client is None:
+        return []
+    try:
+        r = await client.get("/app_users", headers=_headers(), params={"select": "*"})
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, list) else []
+    except Exception:
+        logger.exception("supabase read app_users (with hash) failed")
+        return []
+
+
+async def insert_user(row: dict) -> dict | None:
+    client = await _get_client()
+    if client is None:
+        return None
+    try:
+        r = await client.post("/app_users", headers=_headers({"Prefer": "return=representation"}), json=row)
+        r.raise_for_status()
+        data = r.json()
+        return data[0] if isinstance(data, list) and data else None
+    except Exception:
+        logger.exception("supabase insert app_users failed")
+        return None
+
+
+async def update_user(user_id: str, patch: dict) -> None:
+    client = await _get_client()
+    if client is None:
+        return
+    try:
+        await client.patch("/app_users", headers=_headers(),
+                           params={"id": f"eq.{user_id}"}, json=patch)
+    except Exception:
+        logger.exception("supabase update app_users failed")
+
+
 async def upsert_grid(state: dict) -> None:
     await _upsert("grid_state", {**state, "id": "default"}, on_conflict="id")
 

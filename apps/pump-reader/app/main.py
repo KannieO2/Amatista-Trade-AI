@@ -31,8 +31,9 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
+from . import auth as auth_mod
 from .auth import (
-    COOKIE, LOGIN_HTML, MAX_AGE, auth_enabled, check_credentials, make_token, valid_token,
+    COOKIE, LOGIN_HTML, MAX_AGE, auth_enabled, authenticate, make_token, read_token,
 )
 
 from . import grid_sync, store
@@ -196,6 +197,10 @@ ACCOUNT_POLL_SECONDS = int(os.getenv("PUMP_ACCOUNT_POLL_SECONDS", "120"))
 async def lifespan(app: FastAPI):
     # Sync_State_on_Startup: rebuild open positions before the loops start so the
     # exit engine never loses Phase 1/2 context after a restart.
+    try:
+        await auth_mod.load_users()
+    except Exception:
+        logger.exception("startup user load failed")
     try:
         await _restore_positions()
     except Exception:
@@ -469,20 +474,121 @@ register_grvt_proxy(app)
 
 _PUBLIC_PATHS = {"/login", "/logout", "/health"}
 
+# Admin-only page to create/manage the per-user accounts. Same dark palette as
+# the dashboard + login. Reached at /admin (gated to role=admin in _auth_gate).
+ADMIN_USERS_HTML = """<!doctype html><html lang="es"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>TradeOS AI · Cuentas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+  *{box-sizing:border-box} body{margin:0;font-family:Geist,system-ui,sans-serif;background:#070a0f;color:#e6e9ef;padding:24px}
+  .wrap{max-width:760px;margin:0 auto}
+  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+  h1{font-size:18px;margin:0;font-weight:600}
+  a.back{color:#8b95a7;text-decoration:none;font-size:13px} a.back:hover{color:#ff5a86}
+  .card{background:#0c1018;border:1px solid #1b2230;border-radius:14px;padding:18px;margin-bottom:16px}
+  .card h2{font-size:13px;margin:0 0 12px;color:#b6bdcc;font-weight:600}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+  .fld{flex:1;min-width:140px} label{display:block;font-size:11px;color:#8b95a7;margin:0 0 5px}
+  input,select{width:100%;background:#070a0f;border:1px solid #222b3a;border-radius:9px;color:#e6e9ef;padding:9px 11px;font-family:inherit;font-size:13px;outline:none}
+  input:focus,select:focus{border-color:#3a4760}
+  button{background:linear-gradient(90deg,#ff2f6e,#ff5a86);border:0;color:#fff;padding:9px 16px;border-radius:9px;font-weight:600;font-size:13px;cursor:pointer;font-family:inherit}
+  button.ghost{background:transparent;border:1px solid #33405a;color:#b6bdcc}
+  table{width:100%;border-collapse:collapse;font-size:13px} th{text-align:left;color:#8b95a7;font-weight:500;font-size:11px;padding:8px 10px;border-bottom:1px solid #1b2230}
+  td{padding:10px;border-bottom:1px solid #131923}
+  .tag{font-size:11px;padding:2px 8px;border-radius:6px;border:1px solid #33405a;color:#b6bdcc}
+  .tag.admin{color:#ff8fb0;border-color:#ff2f6e44} .tag.on{color:#43d39e;border-color:#43d39e44} .tag.off{color:#ff6b6b;border-color:#ff6b6b44}
+  .msg{font-size:12px;margin-top:10px;min-height:14px} .msg.err{color:#ff6b6b} .msg.ok{color:#43d39e}
+  .acts{display:flex;gap:6px;justify-content:flex-end}
+</style></head><body><div class="wrap">
+  <div class="top"><h1>Cuentas · TradeOS AI</h1><a class="back" href="/">← Volver al panel</a></div>
+  <div class="card">
+    <h2>Crear cuenta</h2>
+    <div class="row">
+      <div class="fld"><label>Usuario</label><input id="u" autocomplete="off"/></div>
+      <div class="fld"><label>Contraseña</label><input id="p" type="text" autocomplete="off"/></div>
+      <div class="fld" style="max-width:150px"><label>Rol</label>
+        <select id="r"><option value="operator">Operador (su bot)</option><option value="admin">Admin</option></select></div>
+      <button onclick="createUser()">Crear</button>
+    </div>
+    <div id="cmsg" class="msg"></div>
+  </div>
+  <div class="card">
+    <h2>Cuentas existentes</h2>
+    <table><thead><tr><th>Usuario</th><th>Rol</th><th>Estado</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+  </div>
+</div>
+<script>
+async function load(){
+  const r = await fetch('/admin/users'); const d = await r.json();
+  const tb = document.getElementById('rows'); tb.innerHTML='';
+  for(const u of d.users){
+    const tr = document.createElement('tr');
+    const role = u.role==='admin' ? '<span class="tag admin">admin</span>' : '<span class="tag">operador</span>';
+    const st = u.active ? '<span class="tag on">activo</span>' : '<span class="tag off">inactivo</span>';
+    let acts = '';
+    if(!u.owner){
+      acts = '<div class="acts">'
+        + '<button class="ghost" onclick="resetPw(\\''+u.id+'\\')">Reset pass</button>'
+        + '<button class="ghost" onclick="toggle(\\''+u.id+'\\','+(!u.active)+')">'+(u.active?'Desactivar':'Activar')+'</button></div>';
+    } else { acts = '<div class="acts"><span class="tag">dueño</span></div>'; }
+    tr.innerHTML = '<td>'+u.username+'</td><td>'+role+'</td><td>'+st+'</td><td>'+acts+'</td>';
+    tb.appendChild(tr);
+  }
+}
+async function createUser(){
+  const m=document.getElementById('cmsg'); m.className='msg'; m.textContent='';
+  const fd=new FormData(); fd.append('username',document.getElementById('u').value);
+  fd.append('password',document.getElementById('p').value); fd.append('role',document.getElementById('r').value);
+  const r=await fetch('/admin/users',{method:'POST',body:fd}); const d=await r.json();
+  if(d.ok){ m.className='msg ok'; m.textContent='Cuenta creada.'; document.getElementById('u').value=''; document.getElementById('p').value=''; load(); }
+  else { m.className='msg err'; m.textContent=d.error||'Error'; }
+}
+async function toggle(id,active){
+  const fd=new FormData(); fd.append('active',active);
+  await fetch('/admin/users/'+id+'/active',{method:'POST',body:fd}); load();
+}
+async function resetPw(id){
+  const pw=prompt('Nueva contraseña (mín 6):'); if(!pw) return;
+  const fd=new FormData(); fd.append('password',pw);
+  const r=await fetch('/admin/users/'+id+'/password',{method:'POST',body:fd}); const d=await r.json();
+  if(!d.ok) alert(d.error||'Error');
+}
+load();
+</script></body></html>"""
+
 
 @app.middleware("http")
 async def _auth_gate(request: Request, call_next):
-    """Require login for everything once APP_PASSWORD is set (off in dev/paper)."""
+    """Require login for everything once APP_PASSWORD is set (off in dev/paper).
+
+    On success the decoded session ({"username","id","role"}) is attached to
+    request.state.user so per-user routes know who is calling and admin-only
+    routes (/admin/*, the grid) can check the role."""
     if not auth_enabled():
+        request.state.user = {"id": auth_mod.OWNER_UID, "username": "dev", "role": "admin"}
         return await call_next(request)
     path = request.url.path
-    if path in _PUBLIC_PATHS or path.startswith("/grid"):
+    if path in _PUBLIC_PATHS:
         return await call_next(request)
-    if valid_token(request.cookies.get(COOKIE)):
-        return await call_next(request)
-    if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
-        return RedirectResponse("/login", status_code=303)
-    return JSONResponse({"detail": "authentication required"}, status_code=401)
+    user = read_token(request.cookies.get(COOKIE))
+    if user is None:
+        if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+            return RedirectResponse("/login", status_code=303)
+        return JSONResponse({"detail": "authentication required"}, status_code=401)
+    request.state.user = user
+    # Admin-only areas: user management and the single-account grid bot.
+    if (path.startswith("/admin") or path.startswith("/grid")) and user.get("role") != "admin":
+        if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+            return HTMLResponse(
+                "<body style='font-family:system-ui;background:#070a0f;color:#e6e9ef;"
+                "display:flex;height:100vh;align-items:center;justify-content:center'>"
+                "<div>Acceso solo para admin. <a style='color:#ff5a86' href='/'>Volver</a></div></body>",
+                status_code=403,
+            )
+        return JSONResponse({"detail": "admin only"}, status_code=403)
+    return await call_next(request)
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -492,9 +598,10 @@ async def login_page() -> str:
 
 @app.post("/login")
 async def login_submit(username: str = Form(...), password: str = Form(...)):
-    if check_credentials(username, password):
+    user = authenticate(username, password)
+    if user:
         resp = RedirectResponse("/", status_code=303)
-        resp.set_cookie(COOKIE, make_token(username), max_age=MAX_AGE, httponly=True, samesite="lax")
+        resp.set_cookie(COOKIE, make_token(user), max_age=MAX_AGE, httponly=True, samesite="lax")
         return resp
     return HTMLResponse(LOGIN_HTML.replace("<!--ERR-->", "Invalid username or password"), status_code=401)
 
@@ -504,6 +611,50 @@ async def logout():
     resp = RedirectResponse("/login", status_code=303)
     resp.delete_cookie(COOKIE)
     return resp
+
+
+@app.get("/me")
+async def whoami(request: Request) -> dict:
+    """Who is logged in (the dashboard uses role to show/hide admin tools)."""
+    u = getattr(request.state, "user", None) or {}
+    return {"username": u.get("username"), "role": u.get("role", "operator"), "id": u.get("id")}
+
+
+# --- admin: account management (admin role only; gated in _auth_gate) ---------
+
+@app.get("/admin/users")
+async def admin_list_users() -> dict:
+    return {"users": auth_mod.list_users()}
+
+
+@app.post("/admin/users")
+async def admin_create_user(username: str = Form(...), password: str = Form(...),
+                            role: str = Form("operator")) -> JSONResponse:
+    try:
+        created = await auth_mod.create_user(username, password, role)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({"ok": True, "user": created})
+
+
+@app.post("/admin/users/{user_id}/active")
+async def admin_set_active(user_id: str, active: str = Form("true")) -> dict:
+    await auth_mod.set_active(user_id, active.lower() in ("1", "true", "yes", "on"))
+    return {"ok": True}
+
+
+@app.post("/admin/users/{user_id}/password")
+async def admin_reset_password(user_id: str, password: str = Form(...)) -> JSONResponse:
+    try:
+        await auth_mod.set_password(user_id, password)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page() -> str:
+    return ADMIN_USERS_HTML
 
 
 _grid_token_cache: str | None = None
