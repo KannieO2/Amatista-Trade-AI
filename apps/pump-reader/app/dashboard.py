@@ -308,7 +308,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       </div>
       <div class="search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
-        <input placeholder="Search tokens by symbol or name..." />
+        <input id="tok-search" placeholder="Buscar token por símbolo, cluster o tipo..." autocomplete="off" />
       </div>
       <div class="tb-actions">
         <span id="tb-pump-only">
@@ -922,10 +922,9 @@ function scoreBadge(s){
   const bg=s>=70?"rgba(255,47,110,.14)":s>=40?"rgba(230,162,60,.14)":"rgba(255,255,255,.05)";
   return `<span class="scoreb mono" style="color:${c};background:${bg}">${s}</span>`;
 }
-async function loadTokens(){
-  let c; try{ c=await (await fetch("/candidates")).json(); }catch(e){ return; }
-  $("tok-ts").textContent=new Date().toLocaleTimeString(); $("tok-count").textContent=c.length+" tokens";
-  $("tok-body").innerHTML = c.length ? c.map(t=>{
+let TOKENS=[];
+function renderTokens(list){
+  $("tok-body").innerHTML = list.length ? list.map(t=>{
     const up=t.price_change_pct_24h>=0;
     return `<tr style="cursor:pointer" onclick="openCandidate('${t.symbol}','${t.exchange}')"><td>${scoreBadge(t.pump_score)}</td><td class="mono px">${t.confidence_score}</td>
       <td><span class="sym">${t.symbol}</span></td><td class="px">${upx(t.exchange)}</td>
@@ -935,7 +934,22 @@ async function loadTokens(){
       <td class="mono">${t.volume_spike}x</td><td class="mono">${moneyC(t.liquidity_usd)}</td>
       <td class="px"><span class="stat ${t.status==='waiting_confirmation'?'sw':''}">${tcase(t.status)}</span></td>
       <td><button class="btn" style="padding:4px 10px" onclick="event.stopPropagation();actToken('${t.symbol}','${t.exchange}',this)">Act</button></td></tr>`;
-  }).join("") : `<tr><td colspan="11" class="empty">No candidates yet · run Update on Overview</td></tr>`;
+  }).join("") : `<tr><td colspan="11" class="empty">Sin coincidencias · prueba otro término o corre Update</td></tr>`;
+}
+function filterTokens(){
+  const q=(($("tok-search")||{}).value||"").trim().toLowerCase();
+  const list = !q ? TOKENS : TOKENS.filter(t =>
+    (t.symbol||"").toLowerCase().includes(q) ||
+    (t.cluster||"").toLowerCase().includes(q) ||
+    (t.classification||"").toLowerCase().includes(q) ||
+    (t.exchange||"").toLowerCase().includes(q));
+  $("tok-count").textContent = q ? `${list.length} / ${TOKENS.length} tokens` : `${TOKENS.length} tokens`;
+  renderTokens(list);
+}
+async function loadTokens(){
+  let c; try{ c=await (await fetch("/candidates")).json(); }catch(e){ return; }
+  TOKENS=c; $("tok-ts").textContent=new Date().toLocaleTimeString();
+  filterTokens();   // render with the current search box applied (survives polling)
   loadVelocity();
 }
 async function loadVelocity(){
@@ -1437,6 +1451,9 @@ async function loadMe(){
   }catch(e){}
 }
 loadMe();
+
+// ---- token search box (filters the Tokens table live) ----
+(function(){ const s=$("tok-search"); if(s) s.addEventListener("input", filterTokens); })();
 
 // ---- boot + active-view polling ----
 const viewLoaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, settings:loadSettings, grvt:loadGrvt};
