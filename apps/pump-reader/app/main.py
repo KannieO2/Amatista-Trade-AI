@@ -53,6 +53,9 @@ from .scanner import ScannedCandidate, fetch_token_detail, forensic_check, scan_
 from .velocity import VelocityWatcher, watch_list_from_scores
 from .learning import LearningLab
 from .user_bot import PAPER_BALANCE, UserBot, all_bots, default_allocation, ensure_bots, get_bot
+from .microstructure import MicroObserver, iso as micro_iso
+from .forensics import ForensicsStore
+from .pipeline import Pipeline
 
 logger = logging.getLogger("pump-reader")
 
@@ -94,7 +97,7 @@ class CandidateStatus(StrEnum):
 
 
 # Score at/above which a candidate is surfaced for human confirmation.
-WAITING_CONFIRMATION_THRESHOLD = 75
+WAITING_CONFIRMATION_THRESHOLD = int(os.getenv("PUMP_WAITING_CONFIRMATION_THRESHOLD", "75"))
 
 
 class TokenCandidate(BaseModel):
@@ -190,6 +193,20 @@ _lab = LearningLab()
 # Real-account snapshot cadence (seconds). Only runs when keys are present.
 ACCOUNT_POLL_SECONDS = int(os.getenv("PUMP_ACCOUNT_POLL_SECONDS", "120"))
 
+# Microstructure recorder (FASE 1 — solo recolección de datos). Independiente de
+# la lógica de trading; se inicializa en lifespan. None hasta que arranca el app
+# (así importar main.py — p.ej. desde tools/simulate.py — no abre la DB).
+_micro: MicroObserver | None = None
+OBSERVE_TICK_SECONDS = int(os.getenv("PUMP_OBSERVE_INTERVAL_SECONDS", "60"))
+# Trade forensics (Fases 7+8+9). Autopsia de cada trade (read-only sobre lo que
+# el bot ya hace). None hasta arranque del app.
+_forensics: ForensicsStore | None = None
+# FASE 2 + observabilidad (fases 4/5/6): máquina de estados Candidate→…→Entry +
+# Decision Log. Lee ventanas de micro_snapshots y las puntúa (scores.py). En modo
+# shadow (default) solo observa y registra; en enforcing gobierna las entradas.
+_pipeline: Pipeline | None = None
+PIPELINE_TICK_SECONDS = int(os.getenv("PUMP_FSM_TICK_SECONDS", "60"))
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -203,6 +220,26 @@ async def lifespan(app: FastAPI):
         await _restore_positions()
     except Exception:
         logger.exception("startup position restore failed")
+    # Microstructure recorder (FASE 1): inicia el observador y re-siembra su
+    # watchlist desde la DB local para no perder pre-historia tras un reinicio.
+    global _micro, _forensics, _pipeline
+    try:
+        _micro = MicroObserver()
+        _micro.warm_start()
+    except Exception:
+        logger.exception("microstructure recorder init failed")
+        _micro = None
+    try:
+        _forensics = ForensicsStore()
+    except Exception:
+        logger.exception("forensics store init failed")
+        _forensics = None
+    try:
+        _pipeline = Pipeline()
+        logger.info("pipeline FSM iniciado en modo %s", _pipeline.mode)
+    except Exception:
+        logger.exception("pipeline FSM init failed")
+        _pipeline = None
     tasks = [
         asyncio.create_task(_auto_scan_loop()),
         asyncio.create_task(_grid_tick_loop()),
@@ -211,6 +248,8 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_account_loop()),
         asyncio.create_task(_grid_sync_loop()),
         asyncio.create_task(_daily_discover_loop()),
+        asyncio.create_task(_observe_loop()),
+        asyncio.create_task(_pipeline_loop()),
     ]
     asyncio.create_task(notify.send_system(
         f"🟢 <b>Bot iniciado</b> · modo {os.getenv('PUMP_EXEC_MODE', 'paper')} · "
@@ -227,6 +266,12 @@ async def lifespan(app: FastAPI):
             task.cancel()
         await _velocity.close()
         await grid_sync.close()
+        if _micro is not None:
+            await _micro.close()
+        if _forensics is not None:
+            _forensics.close()
+        if _pipeline is not None:
+            _pipeline.close()
         await store.close()
 
 
@@ -373,6 +418,51 @@ async def _account_loop() -> None:
         await asyncio.sleep(ACCOUNT_POLL_SECONDS)
 
 
+async def _observe_loop() -> None:
+    """FASE 1: cada minuto graba la microestructura de los símbolos observados.
+    Independiente del trading — solo recolección de datos. Nunca tumba el bot."""
+    while True:
+        try:
+            if _micro is not None:
+                n = await _micro.observe_once()
+                if n:
+                    logger.info("microstructure: grabadas %d filas", n)
+        except Exception as exc:
+            logger.exception("observe loop failed")
+            await notify.send_error("Observe loop (microstructure)", repr(exc))
+        await asyncio.sleep(OBSERVE_TICK_SECONDS)
+
+
+def _find_candidate(exchange: str, symbol: str) -> TokenCandidate | None:
+    for c in _candidates.values():
+        if c.exchange.lower() == exchange.lower() and c.symbol.upper() == symbol.upper():
+            return c
+    return None
+
+
+async def _pipeline_loop() -> None:
+    """FASE 2: avanza la máquina de estados cada PIPELINE_TICK_SECONDS. En modo
+    shadow solo registra en decision_log lo que HARÍA; en enforcing ejecuta los
+    intents confirmados por el motor de ejecución actual (sin tocar TP/SL/risk).
+    Best-effort: nunca tumba el bot."""
+    while True:
+        try:
+            if _pipeline is not None:
+                intents = await asyncio.to_thread(_pipeline.tick)
+                if intents and _pipeline.mode == "enforcing":
+                    for it in intents:
+                        cand = _find_candidate(it.exchange, it.symbol)
+                        if cand is None:
+                            continue  # el scan ya soltó el candidato; no se reconstruye
+                        for bot in all_bots():
+                            if bot.auto_entry and not bot.pm.has(it.exchange, it.symbol):
+                                await _auto_enter(bot, cand)
+                        _pipeline.mark_entered(it.symbol, it.exchange)
+        except Exception:
+            logger.exception("pipeline loop failed")
+        await asyncio.sleep(PIPELINE_TICK_SECONDS)
+
+
 async def _persist_position(bot: UserBot, pos) -> None:
     await store.upsert_position({
         # key carries the uid so two users holding the same symbol don't collide
@@ -451,6 +541,13 @@ async def _handle_exit(bot: UserBot, pos, event) -> None:
         # Full close → close card with overall PnL%.
         cost = pos.entry_price * pos.initial_qty
         pnl_pct = (pos.realized_pnl / cost * 100) if cost > 0 else 0.0
+        # Forensics (Fase 7/8): finaliza la fila del trade con el contexto de SALIDA.
+        if _forensics is not None:
+            try:
+                await asyncio.to_thread(_forensics.record_exit, bot.uid, pos,
+                                        event.price, pos.realized_pnl, pnl_pct, event.reason)
+            except Exception:
+                logger.exception("forensics record_exit failed")
         quality = bot.pm.entry_quality(pos)
         _record_learning_raw(
             pos.symbol, "trade_closed", "paper", pos.pump_score, pos.classification,
@@ -934,6 +1031,12 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
         opened = bot.pm.positions.get(bot.pm.key(fill.exchange, fill.symbol))
         if opened:
             await _persist_position(bot, opened)
+            # Forensics (Fase 7/8): captura el contexto de ENTRADA del trade.
+            if _forensics is not None:
+                try:
+                    await asyncio.to_thread(_forensics.record_entry, bot.uid, candidate, opened, accel)
+                except Exception:
+                    logger.exception("forensics record_entry failed")
         _record_learning(candidate.symbol, "auto_entry", "paper", candidate, f"bought ${bot.auto_entry_usd:.0f} @ {fill.fill_price}")
         await store.insert_bot_log(
             "PUMP_SCANNER", "TRADE_BUY",
@@ -1038,6 +1141,21 @@ async def _perform_scan(min_pump_score: int = 1) -> ScanResponse:
     except Exception:
         logger.exception("arbitrage scan failed")
     _last_scan_at = datetime.now(UTC)
+    # FASE 1 (microstructure): alimenta la watchlist de observación con los
+    # símbolos del scan. NO cambia nada del trading — solo marca qué grabar.
+    if _micro is not None:
+        try:
+            _micro.note_candidates([(c.exchange, c.symbol) for c in _candidates.values()])
+        except Exception:
+            logger.exception("micro note_candidates failed")
+    # FASE 2 (pipeline FSM): admite cada candidato del scan a la máquina de
+    # estados. La FSM decide cuándo (y si) promociona a entrada — no entra aquí.
+    if _pipeline is not None:
+        for c in _candidates.values():
+            try:
+                _pipeline.note_candidate(c.symbol, c.exchange)
+            except Exception:
+                logger.exception("pipeline note_candidate failed")
     # Persist the scan snapshot (no-op without Supabase keys).
     await store.upsert_candidates([
         {
@@ -1404,6 +1522,54 @@ async def list_managed(request: Request) -> dict:
 @app.get("/velocity")
 async def velocity_status() -> dict:
     return _velocity.status()
+
+
+@app.get("/micro/status")
+async def micro_status() -> dict:
+    """FASE 1: estado del recolector de microestructura (filas grabadas, símbolos
+    en observación, tamaño de la DB local). Solo lectura, no afecta el trading."""
+    if _micro is None:
+        return {"enabled": False, "note": "recorder not started"}
+    s = _micro.status()
+    return {"enabled": True, **s,
+            "first_ts": micro_iso(s.get("first_ts_ms")),
+            "last_ts": micro_iso(s.get("last_ts_ms"))}
+
+
+@app.get("/forensics/stats")
+async def forensics_stats() -> dict:
+    """Fases 7-9: resumen de la autopsia de trades + ranking por exchange +
+    comparación ganadores vs hard-stops. Solo lectura."""
+    if _forensics is None:
+        return {"enabled": False}
+    return {"enabled": True, "summary": _forensics.stats(),
+            "by_exchange": _forensics.exchange_stats(),
+            "winners_vs_hardstops": _forensics.compare_winners_vs_hardstops()}
+
+
+@app.get("/pipeline/status")
+async def pipeline_status() -> dict:
+    """FASE 2: estado de la máquina de estados (modo, umbrales, conteo por
+    estado). Solo lectura."""
+    if _pipeline is None:
+        return {"enabled": False}
+    return {"enabled": True, **_pipeline.status()}
+
+
+@app.get("/pipeline/board")
+async def pipeline_board() -> dict:
+    """FASE 2: tablero de símbolos en la FSM con sus scores (acc/pers/rug)."""
+    if _pipeline is None:
+        return {"enabled": False, "rows": []}
+    return {"enabled": True, "rows": _pipeline.board()}
+
+
+@app.get("/pipeline/decisions")
+async def pipeline_decisions() -> dict:
+    """FASE 2 (Decision Log): últimas decisiones/transiciones de la FSM."""
+    if _pipeline is None:
+        return {"enabled": False, "rows": []}
+    return {"enabled": True, "rows": _pipeline.recent_decisions()}
 
 
 @app.get("/token/detail")

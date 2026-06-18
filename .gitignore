@@ -15,6 +15,13 @@ tmp/
 external/
 
 
+# microstructure recorder DB (FASE 1) — datos locales, no versionar
+apps/pump-reader/data/
+*.db
+*.db-wal
+*.db-shm
+*.parquet
+
 # generated knowledge graph (graphify)
 graphify-out/
 

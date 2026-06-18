@@ -296,6 +296,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       <a data-view="alerts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0112 0c0 7 3 7 3 7H3s3 0 3-7"/></svg>Alerts</a>
       <a data-view="learning"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M21 8v6"/></svg>Learning</a>
       <a data-view="trades"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 7-8"/></svg>Trades<span class="badge">P6</span></a>
+      <a data-view="pipeline"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 6h6a4 4 0 014 4M7 18h6a4 4 0 004-4"/></svg>Fase 2<span class="badge">FSM</span></a>
       <a data-view="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>Settings</a>
     </nav>
   </aside>
@@ -473,6 +474,27 @@ DASHBOARD_HTML = r"""<!doctype html>
         <div class="phead"><span class="pt">Positions &amp; fills</span><span class="px" id="tr-count">0</span></div>
         <table><thead><tr><th>Time</th><th>Mode</th><th>Exch</th><th>Token</th><th>Side</th><th>Notional</th><th>Fill</th><th>Amount</th><th>SL</th><th>TP</th></tr></thead>
         <tbody id="tr-body"><tr><td colspan="10" class="empty">No trades yet · paper executor armed</td></tr></tbody></table>
+      </div>
+    </section>
+
+    <!-- ============ FASE 2 / PIPELINE VIEW ============ -->
+    <section class="view hidden" id="view-pipeline">
+      <div class="vhead"><div><h1>Fase 2 · Máquina de estados</h1><p>Candidate &rarr; Watchlist &rarr; Monitor &rarr; Confirmation &rarr; Entry · detección de PREPARACIÓN</p></div><div class="ts mono" id="pl-ts">—</div></div>
+      <div class="grid-2b">
+        <div class="panel">
+          <div class="phead"><span class="pt">Estado del pipeline</span><span class="px" id="pl-mode">—</span></div>
+          <div id="pl-status"><div class="empty">cargando…</div></div>
+        </div>
+        <div class="panel">
+          <div class="phead"><span class="pt">Decisiones recientes (Decision Log)</span><span class="px" id="pl-dec-count">0</span></div>
+          <table><thead><tr><th>Hora</th><th>Token</th><th>De&rarr;A</th><th>Acción</th><th>Acc</th><th>Pers</th><th>Rug</th></tr></thead>
+          <tbody id="pl-decisions"><tr><td colspan="7" class="empty">Sin decisiones todavía</td></tr></tbody></table>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="phead"><span class="pt">Tablero de símbolos en la FSM</span><span class="px" id="pl-board-count">0</span></div>
+        <table><thead><tr><th>Token</th><th>Exch</th><th>Estado</th><th>Accumulation</th><th>Persistence</th><th>RugRisk</th><th>Seq</th><th>Confirm</th></tr></thead>
+        <tbody id="pl-board"><tr><td colspan="8" class="empty">Ningún símbolo observado aún · alimenta el scan</td></tr></tbody></table>
       </div>
     </section>
 
@@ -664,7 +686,7 @@ document.querySelectorAll(".nav a[data-view]").forEach(a => {
     document.querySelectorAll(".view").forEach(v => v.classList.add("hidden"));
     activeView = a.dataset.view;
     $("view-" + activeView).classList.remove("hidden");
-    const loaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, settings:loadSettings};
+    const loaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, pipeline:loadPipeline, settings:loadSettings};
     if (loaders[activeView]) loaders[activeView]();
   });
 });
@@ -681,7 +703,7 @@ function setMode(m){
     loadGrvt();
   } else {
     $("view-" + activeView).classList.remove("hidden");
-    const loaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, settings:loadSettings};
+    const loaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, pipeline:loadPipeline, settings:loadSettings};
     if (loaders[activeView]) loaders[activeView]();
   }
 }
@@ -1060,6 +1082,38 @@ async function loadTrades(){
     <td class="mono">${money(f.notional_usd)}</td><td class="mono">${f.fill_price}</td><td class="mono">${f.amount}</td>
     <td class="mono px">${f.stop_loss}</td><td class="mono px">${f.take_profit}</td></tr>`).join("")
     : `<tr><td colspan="10" class="empty">No trades yet · paper executor armed</td></tr>`;
+}
+function plScoreCell(v, invert){
+  const n=Number(v)||0; const good = invert ? n<=40 : n>=55;
+  const col = invert ? (n>=55?'var(--red)':(n>=40?'var(--amber,#b56a00)':'var(--green)'))
+                     : (n>=60?'var(--green)':(n>=40?'var(--amber,#b56a00)':'var(--muted-2)'));
+  return `<td class="mono" style="color:${col};font-weight:600">${n}</td>`;
+}
+async function loadPipeline(){
+  let st,b,d;
+  try{ st=await (await fetch("/pipeline/status")).json(); b=await (await fetch("/pipeline/board")).json(); d=await (await fetch("/pipeline/decisions")).json(); }
+  catch(e){ return; }
+  if(st.enabled===false){ $("pl-status").innerHTML='<div class="empty">Pipeline no iniciado</div>'; return; }
+  const thr=st.thresholds||{}; const stc=st.states||{};
+  $("pl-mode").textContent=(st.mode||"—").toUpperCase();
+  $("pl-status").innerHTML=
+    `<div class="pnlrow"><span>Modo</span><b>${st.mode==='enforcing'?'ENFORCING · gobierna entradas':'SHADOW · solo observa'}</b></div>`
+   +`<div class="pnlrow"><span>Ventana de scoring</span><b class="mono">${st.window_min} min</b></div>`
+   +`<div class="pnlrow"><span>Umbrales</span><b class="mono">Acc≥${thr.acc_min} · Pers≥${thr.pers_min} · Rug≤${thr.rug_max} · ${thr.confirm_ticks} ticks</b></div>`
+   +`<div class="pnlrow"><span>Por estado</span><b class="mono">`+Object.entries(stc).map(([k,v])=>`${k}:${v}`).join(" · ")+`</b></div>`;
+  const dec=(d.rows||[]); $("pl-dec-count").textContent=dec.length;
+  $("pl-decisions").innerHTML=dec.length ? dec.map(r=>
+    `<tr><td class="mono px">${new Date(r.ts_ms).toLocaleTimeString()}</td><td class="sym">${r.symbol} <span class="px">${upx(r.exchange)}</span></td>
+     <td class="px">${r.from_state}&rarr;${r.to_state}</td><td><span class="px">${r.action}</span></td>
+     <td class="mono">${r.acc==null?'—':r.acc}</td><td class="mono">${r.pers==null?'—':r.pers}</td><td class="mono">${r.rug==null?'—':r.rug}</td></tr>`
+  ).join("") : `<tr><td colspan="7" class="empty">Sin decisiones todavía</td></tr>`;
+  const rows=(b.rows||[]); $("pl-board-count").textContent=rows.length+" símbolos";
+  $("pl-board").innerHTML=rows.length ? rows.map(r=>
+    `<tr><td class="sym">${r.symbol}</td><td class="px">${upx(r.exchange)}</td><td><span class="px">${r.state}</span></td>`
+    +plScoreCell(r.acc,false)+plScoreCell(r.pers,false)+plScoreCell(r.rug,true)
+    +`<td class="mono px">${r.seq}</td><td class="mono">${r.confirm_count||0}</td></tr>`
+  ).join("") : `<tr><td colspan="8" class="empty">Ningún símbolo observado aún · alimenta el scan</td></tr>`;
+  $("pl-ts").textContent=new Date().toLocaleTimeString();
 }
 async function loadSettings(){
   let s,a; try{ s=await (await fetch("/status")).json(); a=await (await fetch("/allocation")).json(); }catch(e){ return; }
@@ -1456,7 +1510,7 @@ loadMe();
 (function(){ const s=$("tok-search"); if(s) s.addEventListener("input", filterTokens); })();
 
 // ---- boot + active-view polling ----
-const viewLoaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, settings:loadSettings, grvt:loadGrvt};
+const viewLoaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, pipeline:loadPipeline, settings:loadSettings, grvt:loadGrvt};
 loadOverview();
 setInterval(()=>{ const fn=viewLoaders[activeView]; if(fn) fn(); }, 15000);
 </script>
