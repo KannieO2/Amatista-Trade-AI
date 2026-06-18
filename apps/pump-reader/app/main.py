@@ -163,6 +163,11 @@ _last_scan_at: datetime | None = None
 # threshold so the exit engine has something to manage. Never auto-enters live.
 AUTO_ENTRY = os.getenv("PUMP_AUTO_ENTRY", "true").lower() == "true"
 AUTO_ENTRY_USD = float(os.getenv("PUMP_AUTO_ENTRY_USD", "100"))
+# Entry momentum/exhaustion gate (anti-chase): skip a candidate already up this
+# much on 24h (the pump ran — buying it = buying the top), and require a minimum
+# volume spike behind scan-path entries.
+ENTRY_MAX_CHASE_PCT = float(os.getenv("PUMP_ENTRY_MAX_CHASE_PCT", "60"))
+ENTRY_MIN_VOL_SPIKE = float(os.getenv("PUMP_ENTRY_MIN_VOL_SPIKE", "2.5"))
 # Adaptive confirmation threshold — the learning loop lowers it after late
 # entries (be more sensitive to early moves) and raises it after false starts.
 _adaptive_threshold = float(WAITING_CONFIRMATION_THRESHOLD)
@@ -447,7 +452,7 @@ async def _handle_exit(bot: UserBot, pos, event) -> None:
             pos.symbol, "trade_closed", "paper", pos.pump_score, pos.classification,
             f"realized {pos.realized_pnl:+.2f} · entry {quality}",
         )
-        _apply_learning(quality)
+        _apply_learning(quality, pos.realized_pnl)
         note = f"{quality.upper()} | THRESHOLD: {round(_adaptive_threshold)}"
         await notify.send_exit(
             notify.format_exit(pos.symbol, pos.exchange, event.price, pnl_pct, event.reason, note)
@@ -459,14 +464,26 @@ async def _handle_exit(bot: UserBot, pos, event) -> None:
         )
 
 
-def _apply_learning(quality: str) -> None:
-    """Feedback loop: late entries make the bot more sensitive (lower the
-    confirmation threshold); false-positive closes raise it back."""
+# Confirmation-threshold band. Floor 70 stops the bot drifting into reckless
+# over-trading; ceiling 90 is maximally selective.
+THRESHOLD_FLOOR = float(os.getenv("PUMP_THRESHOLD_FLOOR", "70"))
+THRESHOLD_CEIL = float(os.getenv("PUMP_THRESHOLD_CEIL", "90"))
+
+
+def _apply_learning(quality: str, pnl: float) -> None:
+    """Loss-averse feedback loop. A LOSING close means the bot entered noise →
+    raise the confirmation threshold (be MORE selective). A clean early entry on a
+    real pump can afford a touch more aggression.
+
+    This REPLACES the old loop that lowered the bar after weak ("late") trades —
+    that spiralled: each small-loss timeout made the bot less selective, which
+    bought more noise, which produced more small-loss timeouts."""
     global _adaptive_threshold
-    if quality == "late_entry":
-        _adaptive_threshold = max(55.0, _adaptive_threshold - 3)
+    if pnl < 0:
+        _adaptive_threshold = min(THRESHOLD_CEIL, _adaptive_threshold + 2)   # pickier after a loss
     elif quality == "early_entry":
-        _adaptive_threshold = min(90.0, _adaptive_threshold + 1)
+        _adaptive_threshold = max(THRESHOLD_FLOOR, _adaptive_threshold - 1)  # real pump caught early
+    # a small win that wasn't an early entry leaves the threshold where it is
 
 
 app = FastAPI(title="TradeOS AI Pump Reader", version="0.4.0", lifespan=lifespan)
@@ -863,8 +880,24 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
     """Paper-only auto buy on a confirmed candidate into ONE user's bot; hand it
     to that bot's exit engine.
 
-    Runs the ForensicFilter gate first (real CEX-sourced spread/liquidity/book
-    checks). A blocked candidate is logged and skipped — never bought."""
+    Gates, in order: (1) momentum/exhaustion — don't chase a pump that already ran
+    (buying the blow-off top) and require real volume behind it; (2) ForensicFilter
+    — real CEX-sourced spread/liquidity/book checks. A blocked candidate is logged
+    and skipped — never bought."""
+    # (1) Momentum / exhaustion gate — the #1 source of "enter then time out at a
+    # small loss" churn is chasing finished or thin pumps.
+    if candidate.price_change_pct_24h >= ENTRY_MAX_CHASE_PCT:
+        _record_learning(candidate.symbol, "skip_exhausted", "paper", candidate,
+                         f"+{candidate.price_change_pct_24h:.0f}% 24h ya corrido (chase)")
+        return
+    # Volume floor applies to scan-path entries. Velocity-path entries (accel set)
+    # already proved live acceleration + rising price, so they skip this.
+    if accel is None and candidate.volume_spike < ENTRY_MIN_VOL_SPIKE:
+        _record_learning(candidate.symbol, "skip_low_volume", "paper", candidate,
+                         f"vol spike {candidate.volume_spike:.1f}x < {ENTRY_MIN_VOL_SPIKE}x")
+        return
+
+    # (2) ForensicFilter.
     ok, reasons = forensic_check(
         spread_pct=candidate.spread_pct,
         liquidity_usd=candidate.liquidity_usd,
