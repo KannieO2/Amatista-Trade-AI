@@ -165,7 +165,7 @@ def list_users() -> list[dict]:
 
 LOGIN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>TradeOS AI · Sign in</title>
+<title>Amatista · TradeOS · Entrar</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@500&display=swap" rel="stylesheet"/>
 <style>
@@ -187,7 +187,7 @@ LOGIN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8"/>
   .err{color:#ff6b6b;font-size:12px;margin-top:12px;min-height:14px}
 </style></head><body>
   <form class="card" method="post" action="/login">
-    <div class="logo"><div class="dot"></div><div><h1>TradeOS AI</h1><p>ScamPump Radar · sign in</p></div></div>
+    <div class="logo"><div class="dot"></div><div><h1>Amatista · TradeOS</h1><p>Pump Radar + Grid · entrar</p></div></div>
     <label>Username</label><input name="username" autocomplete="username" autofocus/>
     <label>Password</label><input name="password" type="password" autocomplete="current-password"/>
     <button type="submit">Sign in</button>

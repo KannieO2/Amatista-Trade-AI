@@ -10,7 +10,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>ScamPump Radar</title>
+<title>Amatista · TradeOS</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -288,7 +288,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 <body>
 <div class="app">
   <aside class="sidebar">
-    <div class="brand"><div class="dot"></div><div><b>ScamPump</b> <span>Radar</span></div></div>
+    <div class="brand"><div class="dot"></div><div><b>Amatista</b> <span>TradeOS</span></div></div>
     <div class="navlabel">Pump Reader</div>
     <nav class="nav">
       <a class="active" data-view="pump"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Overview</a>
