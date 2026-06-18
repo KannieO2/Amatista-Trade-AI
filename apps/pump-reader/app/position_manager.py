@@ -25,6 +25,12 @@ TRAIL_PCT = float(os.getenv("PUMP_TRAIL_PCT", "12"))       # phase-2 trailing st
 HARD_STOP_PCT = float(os.getenv("PUMP_STOP_LOSS_PCT", "8"))  # hard stop loss
 DUMP_TICK_PCT = float(os.getenv("PUMP_DUMP_TICK_PCT", "10"))  # abrupt one-tick drop = dump
 
+# Dynamic risk management.
+TIMEOUT_MINUTES = float(os.getenv("PUMP_TIMEOUT_MINUTES", "8"))    # time-stop window
+TIMEOUT_BAND_PCT = float(os.getenv("PUMP_TIMEOUT_BAND_PCT", "3"))  # lateral = |gain| <= band
+BREAKEVEN_PCT = float(os.getenv("PUMP_BREAKEVEN_PCT", "4"))        # gain that arms break-even
+BREAKEVEN_MARGIN_PCT = float(os.getenv("PUMP_BREAKEVEN_MARGIN_PCT", "0.5"))  # SL above entry
+
 
 @dataclass
 class ManagedPosition:
@@ -42,6 +48,8 @@ class ManagedPosition:
     closed: bool = False
     pump_score: int = 0
     classification: str = "n/a"
+    be_armed: bool = False        # break-even stop activated (gain crossed BREAKEVEN_PCT)
+    be_stop: float = 0.0          # break-even stop price (entry + margin)
 
 
 @dataclass
@@ -93,6 +101,7 @@ class PositionManager:
         gain = (price - pos.entry_price) / pos.entry_price * 100
         drop_from_peak = (pos.peak_price - price) / pos.peak_price * 100 if pos.peak_price > 0 else 0
         tick_drop = (prev - price) / prev * 100 if prev > 0 else 0
+        elapsed_min = (datetime.now(UTC) - pos.entry_at).total_seconds() / 60
 
         events: list[ExitEvent] = []
         # Hard stop first (capital protection priority).
@@ -102,6 +111,19 @@ class PositionManager:
         # Dump detector: abrupt one-tick collapse -> panic sell the rest.
         if tick_drop >= DUMP_TICK_PCT:
             events.append(self._sell(pos, price, 1.0, "dump"))
+            return events
+        # Break-even: once gain crossed +BREAKEVEN_PCT, the stop moves to entry +
+        # margin. Falling back to it locks the trade at ~breakeven (no give-back).
+        if not pos.be_armed and gain >= BREAKEVEN_PCT:
+            pos.be_armed = True
+            pos.be_stop = pos.entry_price * (1 + BREAKEVEN_MARGIN_PCT / 100)
+        if pos.be_armed and price <= pos.be_stop:
+            events.append(self._sell(pos, price, 1.0, "break_even"))
+            return events
+        # Time-stop: after TIMEOUT_MINUTES going nowhere (|gain| <= band), free the
+        # capital for a better setup instead of bag-holding a dead move.
+        if elapsed_min >= TIMEOUT_MINUTES and abs(gain) <= TIMEOUT_BAND_PCT:
+            events.append(self._sell(pos, price, 1.0, "timeout"))
             return events
         # Phase 1: secure capital with a partial take-profit.
         if pos.phase == 1 and gain >= TP1_PCT:

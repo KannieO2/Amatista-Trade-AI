@@ -117,7 +117,9 @@ class VelocityWatcher:
         """One fast tick over the hot-list. Returns symbols that just accelerated."""
         triggers: list[TriggerEvent] = []
         now = time.time()
-        for entry in self.watch.values():
+        # Snapshot the dict: sync() runs in a different task and may add/remove
+        # symbols mid-poll → "dictionary changed size during iteration".
+        for entry in list(self.watch.values()):
             metrics = await self._accel_metrics(entry.exchange, entry.symbol)
             if not metrics:
                 continue
@@ -159,7 +161,7 @@ class VelocityWatcher:
                     "last_accel": e.last_accel,
                     "primed": e.primed,
                 }
-                for e in self.watch.values()
+                for e in list(self.watch.values())
             ],
         }
 

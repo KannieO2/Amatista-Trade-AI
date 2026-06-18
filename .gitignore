@@ -14,3 +14,9 @@ coverage/
 tmp/
 external/
 
+
+# generated knowledge graph (graphify)
+graphify-out/
+
+# local Claude config
+.claude/

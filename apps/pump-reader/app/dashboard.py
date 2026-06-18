@@ -21,7 +21,27 @@ DASHBOARD_HTML = r"""<!doctype html>
     --muted-2:#9aa5b8; --pink:#ff2f6e; --pink-soft:#f4789a; --green:#2fd08a;
     --purple:#8b86f2; --amber:#e6a23c; --red:#e8556a; --blue:#3d7bff;
   }
+  /* light mode: override surfaces/text, keep the accent palette */
+  html[data-theme="light"]{
+    --bg:#eef1f7; --panel:#ffffff; --panel-2:#f6f8fc; --inset:#eaeef6;
+    --border:#d7deea; --border-soft:#e4e9f2; --text:#0f1622; --muted:#7a869b;
+    --muted-2:#4d5973; --green:#10a86a; --red:#d83a52;
+  }
+  html[data-theme="light"] body{
+    background:
+      radial-gradient(1000px 540px at 10% -8%, rgba(255,47,110,.08), transparent 58%),
+      radial-gradient(900px 620px at 102% -4%, rgba(61,123,255,.07), transparent 55%),
+      radial-gradient(700px 700px at 85% 110%, rgba(139,134,242,.06), transparent 60%),
+      var(--bg);
+  }
+  html[data-theme="light"] .sidebar{background:rgba(255,255,255,.7);border-right:1px solid var(--border)}
+  html[data-theme="light"] .nav a.active{background:linear-gradient(90deg,rgba(255,47,110,.10),rgba(255,47,110,.02));color:#1a1f2b}
+  html[data-theme="light"] .card,html[data-theme="light"] .panel,html[data-theme="light"] .modal,
+  html[data-theme="light"] .topbar,html[data-theme="light"] .pill{background:rgba(255,255,255,.75);border-color:var(--border)}
   *{box-sizing:border-box}
+  /* hide scrollbars everywhere (scroll still works) */
+  *{scrollbar-width:none;-ms-overflow-style:none}
+  *::-webkit-scrollbar{width:0;height:0;display:none}
   html,body{margin:0;height:100%}
   body{
     background:
@@ -40,6 +60,27 @@ DASHBOARD_HTML = r"""<!doctype html>
   }
   .mono{font-family:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
   .app{display:grid;grid-template-columns:212px 1fr;min-height:100dvh}
+
+  /* equity curve hover tooltip */
+  .eqwrap{position:relative;cursor:crosshair}
+  .eqline{position:absolute;top:0;width:1px;background:var(--green);opacity:0;pointer-events:none;transition:opacity .1s}
+  .eqdot{position:absolute;width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px rgba(47,208,138,.25);transform:translate(-50%,-50%);opacity:0;pointer-events:none}
+  .eqtip{position:absolute;pointer-events:none;opacity:0;transform:translate(-50%,-130%);background:var(--inset);border:1px solid var(--border);border-radius:8px;padding:6px 9px;font-size:11px;white-space:nowrap;z-index:5;box-shadow:0 8px 24px -8px rgba(0,0,0,.5)}
+  .eqtip .d{color:var(--muted);font-size:10px;margin-bottom:2px}
+  .eqtip .v{font-weight:600}
+  .eqtip .dl{font-family:"Geist Mono",monospace}
+  /* theme toggle */
+  .pill.icon{padding:6px 8px;display:inline-flex;align-items:center;justify-content:center}
+  .pill.icon svg{width:15px;height:15px}
+  /* pnl breakdown rows */
+  .pnlrow{display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:center;padding:9px 11px;border:1px solid var(--border-soft);border-radius:9px;margin-bottom:7px;background:var(--panel-2)}
+  .pnlrow .sym{font-weight:600}
+  .pnlrow .sub{font-size:11px;color:var(--muted)}
+  .pnlrow .tot{font-family:"Geist Mono",monospace;font-weight:600;text-align:right}
+  .pnlrow .br{font-family:"Geist Mono",monospace;font-size:11px;color:var(--muted);text-align:right}
+  .pnl-sec{display:flex;justify-content:space-between;align-items:center;margin:14px 2px 8px;font-size:10px;letter-spacing:.12em;text-transform:uppercase}
+  .pnl-sec:first-child{margin-top:2px}
+  .pnl-sec-t{font-weight:600}
 
   /* sidebar */
   .sidebar{background:rgba(12,16,24,.6);border-right:1px solid rgba(255,255,255,.06);padding:18px 14px;display:flex;flex-direction:column;gap:6px}
@@ -200,12 +241,12 @@ DASHBOARD_HTML = r"""<!doctype html>
   /* modal */
   .modal-overlay{position:fixed;inset:0;background:rgba(4,6,10,.66);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;z-index:50}
   .modal-overlay.hidden{display:none}
-  .modal{width:520px;max-width:92vw;background:rgba(18,24,34,.72);border:1px solid rgba(255,255,255,.1);border-radius:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 40px 90px -20px rgba(0,0,0,.8);overflow:hidden;display:flex;flex-direction:column;max-height:92vh}
-  .modal .mh{display:flex;align-items:flex-start;justify-content:space-between;padding:18px 18px 0}
+  .modal{width:520px;max-width:92vw;background:rgba(18,24,34,.72);border:1px solid rgba(255,255,255,.1);border-radius:16px;box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 40px 90px -20px rgba(0,0,0,.8);overflow:hidden;display:flex;flex-direction:column;max-height:94vh}
+  .modal .mh{display:flex;align-items:flex-start;justify-content:space-between;padding:14px 18px 0}
   .modal .mh h3{margin:0;font-size:16px;font-weight:600}
   .modal .mh p{margin:5px 0 0;color:var(--muted);font-size:12px}
   .modal .mx{cursor:pointer;color:var(--muted);background:none;border:none;font-size:18px;line-height:1}
-  .modal .mb{padding:16px 18px;overflow-y:auto;flex:1;min-height:0}
+  .modal .mb{padding:12px 18px;overflow-y:auto;flex:1;min-height:0}
   .modal .mh,.modal .mfoot{flex:0 0 auto}
   .mfield{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
   .mfield label{color:var(--muted-2);font-size:12px}
@@ -274,9 +315,10 @@ DASHBOARD_HTML = r"""<!doctype html>
           <button class="pill" id="btn-discover"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>Discover</button>
           <button class="pill" id="btn-update"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>Update</button>
           <button class="pill" id="btn-balance">Balance <b id="tb-balance" class="mono">$0.0K</b></button>
-          <span class="pill">PNL 7D <b id="tb-pnl" class="mono">+$0.00</b></span>
+          <button class="pill" id="btn-pnl" title="Ver qué tokens ganan o pierden">PNL 7D <b id="tb-pnl" class="mono">+$0.00</b></button>
         </span>
         <span class="pill live green"><span class="ldot"></span>Live</span>
+        <button class="pill icon" id="btn-theme" title="Modo claro / oscuro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
         <a class="pill" href="/logout" style="text-decoration:none">Logout</a>
       </div>
     </header>
@@ -544,7 +586,7 @@ DASHBOARD_HTML = r"""<!doctype html>
         </div>
         <div id="cd-ring"></div>
       </div>
-      <div id="cd-tabs" style="display:flex;gap:16px;border-bottom:1px solid var(--border-soft);margin:16px 0 12px"></div>
+      <div id="cd-tabs" style="display:flex;gap:16px;border-bottom:1px solid var(--border-soft);margin:10px 0 8px"></div>
       <div id="cd-tabbody"></div>
     </div>
     <div class="mfoot" style="justify-content:space-between;flex-wrap:wrap">
@@ -578,6 +620,26 @@ DASHBOARD_HTML = r"""<!doctype html>
     <div class="mfoot">
       <button class="btn" id="bal-cancel">Close</button>
       <button class="btn primary" id="bal-alloc">Edit allocation</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="pnl-modal">
+  <div class="modal" style="width:560px;max-width:94vw">
+    <div class="mh">
+      <div><h3>PnL 7 días · por token</h3><p id="pnl-sub">—</p></div>
+      <button class="mx" id="pnl-close">&times;</button>
+    </div>
+    <div class="mb">
+      <div class="statgrid split" style="margin-bottom:14px">
+        <div class="sbox"><div class="l">Total 7d</div><div class="v mono" id="pnl-total">$0</div></div>
+        <div class="sbox"><div class="l">Ganando</div><div class="v green mono" id="pnl-win">0</div></div>
+        <div class="sbox"><div class="l">Perdiendo</div><div class="v mono" id="pnl-lose" style="color:var(--red)">0</div></div>
+      </div>
+      <div id="pnl-rows"><div class="empty">—</div></div>
+    </div>
+    <div class="mfoot">
+      <button class="btn" id="pnl-cancel">Cerrar</button>
     </div>
   </div>
 </div>
@@ -632,8 +694,9 @@ function sparkSvg(vals){
   const col=up?"var(--green)":"var(--red)";
   return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
 }
+const EQ_H=170, EQ_PAD=8;
 function equitySvg(curve){
-  const w=600,h=170,pad=8;
+  const w=600,h=EQ_H,pad=EQ_PAD;
   const vals=(curve&&curve.length?curve:[{v:0},{v:0}]).map(p=>Number(p.v));
   const min=Math.min(...vals),max=Math.max(...vals),rng=(max-min)||Math.max(max,1);
   const n=vals.length;
@@ -642,14 +705,55 @@ function equitySvg(curve){
   let line=vals.map((v,i)=>`${i?'L':'M'}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" ");
   if(n<2){const yy=y(vals[0]).toFixed(1);line=`M${pad} ${yy} L${w-pad} ${yy}`;}
   const area=`${line} L${w-pad} ${h-pad} L${pad} ${h-pad} Z`;
-  return `<svg width="100%" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
-    <defs><linearGradient id="eg" x1="0" x2="0" y1="0" y2="1">
-      <stop offset="0" stop-color="rgba(47,208,138,.28)"/><stop offset="1" stop-color="rgba(47,208,138,0)"/>
-    </linearGradient></defs>
-    <path d="${area}" fill="url(#eg)"/>
-    <path d="${line}" fill="none" stroke="var(--green)" stroke-width="1.8"/>
-  </svg>
+  const up=vals[vals.length-1]>=vals[0];
+  const col=up?"var(--green)":"var(--red)";
+  return `<div class="eqwrap" id="eqwrap" style="height:${h}px">
+    <svg width="100%" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+      <defs><linearGradient id="eg" x1="0" x2="0" y1="0" y2="1">
+        <stop offset="0" stop-color="rgba(47,208,138,.28)"/><stop offset="1" stop-color="rgba(47,208,138,0)"/>
+      </linearGradient></defs>
+      <path d="${area}" fill="url(#eg)"/>
+      <path d="${line}" fill="none" stroke="${col}" stroke-width="1.8"/>
+    </svg>
+    <div class="eqline" id="eqline" style="height:${h}px"></div>
+    <div class="eqdot" id="eqdot"></div>
+    <div class="eqtip" id="eqtip"></div>
+  </div>
   <div class="px mono" style="margin-top:6px">${fmtK(max)}</div>`;
+}
+// Hover tooltip: shows the $value at the cursor + the gain/loss vs start and vs
+// the previous point, so you see exactly where the money moved.
+function wireEquityHover(curve){
+  const wrap=$("eqwrap"); if(!wrap) return;
+  const tip=$("eqtip"),dot=$("eqdot"),gl=$("eqline");
+  const vals=(curve&&curve.length?curve:[]); if(vals.length<2) return;
+  const nums=vals.map(p=>Number(p.v));
+  const min=Math.min(...nums),max=Math.max(...nums),rng=(max-min)||Math.max(max,1);
+  const n=vals.length,h=EQ_H,pad=EQ_PAD,start=nums[0];
+  wrap.onmousemove=(ev)=>{
+    const r=wrap.getBoundingClientRect();
+    let fx=(ev.clientX-r.left)/r.width; fx=Math.max(0,Math.min(1,fx));
+    const i=Math.round(fx*(n-1)), v=nums[i];
+    const px=(i/(n-1))*r.width, py=h-pad-((v-min)/rng)*(h-pad*2);
+    dot.style.left=px+"px"; dot.style.top=py+"px"; dot.style.opacity=1;
+    gl.style.left=px+"px"; gl.style.opacity=.45;
+    // keep the tooltip fully inside the panel: clamp horizontally, and flip it
+    // BELOW the point when near the top so it never gets clipped ("se come").
+    const tw=tip.offsetWidth||130, th=tip.offsetHeight||52;
+    const lx=Math.max(tw/2+4, Math.min(r.width-tw/2-4, px));
+    const above = py > th+8;
+    tip.style.left=lx+"px"; tip.style.top=py+"px";
+    tip.style.transform = above ? "translate(-50%,calc(-100% - 12px))" : "translate(-50%,16px)";
+    tip.style.opacity=1;
+    const dStart=v-start, dPrev=i>0?v-nums[i-1]:0;
+    const dt=vals[i].t?new Date(vals[i].t):null;
+    const dlab=dt?dt.toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):("punto "+(i+1));
+    const cS=dStart>=0?"var(--green)":"var(--red)", cP=dPrev>=0?"var(--green)":"var(--red)";
+    tip.innerHTML=`<div class="d">${dlab}</div><div class="v">$${v.toFixed(2)}</div>`+
+      `<div class="dl" style="color:${cS}">${dStart>=0?'▲ +':'▼ '}${dStart.toFixed(2)} vs inicio</div>`+
+      `<div class="dl" style="color:${cP}">${dPrev>=0?'+':''}${dPrev.toFixed(2)} vs anterior</div>`;
+  };
+  wrap.onmouseleave=()=>{tip.style.opacity=0;dot.style.opacity=0;gl.style.opacity=0;};
 }
 
 // ---- render overview ----
@@ -678,6 +782,7 @@ async function loadOverview(){
   $("cl-long-avg").textContent=lp.avg.toFixed(1); $("cl-long-med").textContent=lp.median.toFixed(2); $("cl-long-max").textContent=lp.max.toFixed(2);
 
   $("equity-chart").innerHTML = equitySvg(d.equity_curve);
+  wireEquityHover(d.equity_curve);
 
   $("tbl-body").innerHTML = (d.table||[]).length ? d.table.map(r=>{
     const sc = r.score>=70?"var(--pink)":r.score>=40?"var(--amber)":"var(--muted)";
@@ -730,7 +835,12 @@ async function loadGrvt(){
     const j=await s.json().catch(()=>null);
     if(j && j.ok && j.token){ localStorage.setItem(j.key||"grvt-grid-token", j.token); }
     if(off) off.style.display="none";
-    if(fr){ fr.style.display="block"; fr.src="/grid/dashboard/?sso="+Date.now(); }
+    if(fr){
+      fr.style.display="block";
+      const t=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";
+      fr.onload=()=>postGridTheme();           // sync theme once the SPA boots
+      fr.src="/grid/dashboard/?theme="+t+"&sso="+Date.now();
+    }
   }catch(e){
     if(off) off.style.display="block";
     if(fr) fr.style.display="none";
@@ -1056,7 +1166,7 @@ function radarSvg(c){
     ["Concentr.", 0, false],
     ["CEX Inflow", 0, false],
   ];
-  const cx=160,cy=146,R=92,n=axes.length;
+  const cx=150,cy=116,R=74,n=axes.length;
   const ang=i=>(-90 + i*360/n)*Math.PI/180;
   const pt=(i,r)=>[cx+Math.cos(ang(i))*R*r, cy+Math.sin(ang(i))*R*r];
   let rings="";
@@ -1073,7 +1183,7 @@ function radarSvg(c){
     labels+=`<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}" dominant-baseline="middle" font-size="10" fill="${a[2]?'#9aa4b5':'#4d5566'}">${a[0]}</text>`;
   });
   const poly=axes.map((a,i)=>pt(i,Math.max(a[1],0.001)).map(x=>x.toFixed(1)).join(",")).join(" ");
-  return `<svg width="100%" viewBox="0 0 320 300" style="display:block;max-width:340px;margin:0 auto">${rings}${spokes}
+  return `<svg width="100%" viewBox="0 0 300 232" style="display:block;max-width:248px;margin:0 auto">${rings}${spokes}
     <polygon points="${poly}" fill="rgba(124,108,255,.22)" stroke="var(--purple)" stroke-width="1.6"/>
     ${axes.map((a,i)=>{const[px,py]=pt(i,Math.max(a[1],0.001));return `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="2.4" fill="${a[2]?'var(--purple)':'#4d5566'}"/>`}).join("")}
     ${labels}</svg>`;
@@ -1210,7 +1320,7 @@ function alertsTab(c, alertsN){
 }
 function scoringTab(c){
   const contrib=contributions(c).map(x=>`
-    <div style="display:flex;align-items:center;gap:10px;margin:7px 0;opacity:${x[4]?1:.5}">
+    <div style="display:flex;align-items:center;gap:10px;margin:4px 0;opacity:${x[4]?1:.5}">
       <span style="width:120px;font-size:12px;color:var(--muted-2)">${x[0]}</span>
       <div style="flex:1;height:6px;border-radius:4px;background:var(--inset);overflow:hidden"><i style="display:block;height:100%;width:${Math.min(x[1]/x[2]*100,100)}%;background:${x[1]>0?'var(--purple)':'var(--inset)'}"></i></div>
       <span class="mono px" style="width:52px;text-align:right">w ${x[2]}</span>
@@ -1235,24 +1345,74 @@ function scoringTab(c){
     </div>`;
   return `
     ${critBanner}
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;align-items:start">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;align-items:start">
       <div>
-        <div class="navlabel" style="padding:0 0 4px">Component radar</div>
+        <div class="navlabel" style="padding:0 0 2px">Component radar</div>
         ${radarSvg(c)}
       </div>
       <div>
-        <div class="navlabel" style="padding:0 0 6px">Weighted contributions</div>
+        <div class="navlabel" style="padding:0 0 4px">Weighted contributions</div>
         ${contrib}
-        <div class="px" style="margin-top:6px;color:var(--muted)">Dim rows = on-chain/futures signals not in public CCXT (not faked).</div>
+        <div class="px" style="margin-top:4px;color:var(--muted)">Dim = on-chain/futures (not in public CCXT, not faked).</div>
       </div>
     </div>
-    <div class="navlabel" style="padding:16px 0 8px">Signals</div>
-    <div class="statgrid">${signals}</div>
-    <div class="empty" style="text-align:left;padding:14px 0 0;line-height:1.6"><b>How is this scored?</b> Final score = max(score_classic, score_long_pump). Long pump = buyer impulse (volume spike + price run + bids stacked); Classic = short-squeeze grind. Score &ge; 75 marks the token <b>waiting confirmation</b> and fires a Telegram alert. Thin liquidity + manufactured volume = criminal_pump_suspect.`;
+    <div class="navlabel" style="padding:10px 0 6px">Signals</div>
+    <div class="statgrid">${signals}</div>`;
 }
 $("cd-close").addEventListener("click",()=>$("cand-modal").classList.add("hidden"));
 $("cd-cancel").addEventListener("click",()=>$("cand-modal").classList.add("hidden"));
 $("cand-modal").addEventListener("click",(e)=>{if(e.target.id==="cand-modal")$("cand-modal").classList.add("hidden")});
+
+// ---- PNL 7D breakdown: which tokens win / lose ----
+async function openPnl(){
+  $("pnl-modal").classList.remove("hidden");
+  $("pnl-rows").innerHTML='<div class="empty">Cargando…</div>';
+  let d; try{ d=await (await fetch("/pnl/breakdown")).json(); }
+  catch(e){ $("pnl-rows").innerHTML='<div class="empty">Error al cargar</div>'; return; }
+  const sign=v=>(v>=0?"+":"")+"$"+Number(v).toFixed(2);
+  $("pnl-total").textContent=sign(d.total); $("pnl-total").style.color=d.total>=0?"var(--green)":"var(--red)";
+  $("pnl-win").textContent=d.winners; $("pnl-lose").textContent=d.losers;
+  $("pnl-sub").textContent=`${d.rows.length} tokens · realizado + flotante (7 días)`;
+  const row=(r)=>{
+    const col=r.total>=0?"var(--green)":"var(--red)";
+    const open=r.open?' <span class="tag" style="color:var(--green)">abierta</span>':'';
+    return `<div class="pnlrow">
+      <div class="pl">
+        <div class="sym">${r.symbol} <span class="px">${upx(r.exchange)}</span>${open}</div>
+        <div class="sub">${r.trades} trade(s) · realizado ${sign(r.realized)} · flotante ${sign(r.unrealized)}</div>
+      </div>
+      <div class="tot" style="color:${col}">${sign(r.total)}</div>
+    </div>`;
+  };
+  const win=d.rows.filter(r=>r.total>0), lose=d.rows.filter(r=>r.total<0), flat=d.rows.filter(r=>r.total===0);
+  const section=(label,color,arr)=> arr.length
+    ? `<div class="pnl-sec"><span class="pnl-sec-t" style="color:${color}">${label}</span><span class="px mono">${arr.length}</span></div>`+arr.map(row).join("")
+    : "";
+  $("pnl-rows").innerHTML = d.rows.length
+    ? section("▲ Ganando","var(--green)",win)+section("▼ Perdiendo","var(--red)",lose)+section("• Neutro","var(--muted)",flat)
+    : '<div class="empty">Sin operaciones en los últimos 7 días</div>';
+}
+$("btn-pnl").addEventListener("click",openPnl);
+$("pnl-close").addEventListener("click",()=>$("pnl-modal").classList.add("hidden"));
+$("pnl-cancel").addEventListener("click",()=>$("pnl-modal").classList.add("hidden"));
+$("pnl-modal").addEventListener("click",(e)=>{if(e.target.id==="pnl-modal")$("pnl-modal").classList.add("hidden")});
+
+// ---- light / dark theme (applies to BOTH sides: pump + embedded grid) ----
+function postGridTheme(){
+  const fr=document.getElementById("grvt-frame");
+  const t=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";
+  if(fr&&fr.contentWindow){ try{ fr.contentWindow.postMessage({tradeosTheme:t},"*"); }catch(e){} }
+}
+function applyTheme(t){
+  document.documentElement.setAttribute("data-theme", t==="light"?"light":"dark");
+  postGridTheme();   // push the same theme into the embedded grid iframe
+}
+applyTheme(localStorage.getItem("tradeos-theme")||"dark");
+$("btn-theme").addEventListener("click",()=>{
+  const cur=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";
+  const nxt=cur==="light"?"dark":"light";
+  localStorage.setItem("tradeos-theme",nxt); applyTheme(nxt);
+});
 
 // ---- boot + active-view polling ----
 const viewLoaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, settings:loadSettings, grvt:loadGrvt};

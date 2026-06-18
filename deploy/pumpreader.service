@@ -1,15 +1,24 @@
 [Unit]
 Description=TradeOS AI Pump Reader
-After=network.target
+After=network.target grvtbot.service
+Wants=grvtbot.service
+# Allow up to 5 restarts per 60s before systemd gives up (avoids a tight crash loop).
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 # Paths assume the repo is cloned at /home/ubuntu/tradeos (see oracle-setup.sh).
 WorkingDirectory=/home/ubuntu/tradeos/apps/pump-reader
 EnvironmentFile=/home/ubuntu/tradeos/.env
 ExecStart=/home/ubuntu/tradeos/apps/pump-reader/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+# Resilience: revive on any exit, wait 10s between attempts.
 Restart=always
-RestartSec=5
+RestartSec=10
 User=ubuntu
+# Logs → journald, tagged so `journalctl -t pumpreader` filters cleanly.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pumpreader
 
 [Install]
 WantedBy=multi-user.target

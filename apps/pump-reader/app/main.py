@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
+import traceback
 from contextlib import asynccontextmanager
 
 import httpx
@@ -42,13 +44,32 @@ from .grvt_proxy import register_grvt_proxy
 from .market import market_for_symbol
 from . import notify
 from .notify import format_alert, send_telegram
-from .position_manager import PositionManager
+from .position_manager import (
+    BREAKEVEN_PCT, DUMP_TICK_PCT, TIMEOUT_MINUTES, ManagedPosition, PositionManager,
+)
 from .risk import RiskGuard
-from .scanner import ScannedCandidate, fetch_token_detail, scan_markets
+from .scanner import ScannedCandidate, fetch_token_detail, forensic_check, scan_markets
 from .velocity import VelocityWatcher, watch_list_from_scores
 from .learning import LearningLab
 
 logger = logging.getLogger("pump-reader")
+
+
+def _fatal_excepthook(exc_type, exc, tb) -> None:
+    """On an uncaught crash, push the traceback to Telegram BEFORE dying so the
+    operator sees why (systemd then restarts the process). KeyboardInterrupt is
+    left to the default handler (clean Ctrl-C / shutdown, not a crash)."""
+    if not issubclass(exc_type, KeyboardInterrupt):
+        tb_text = "".join(traceback.format_exception(exc_type, exc, tb))
+        logger.critical("FATAL uncaught exception:\n%s", tb_text)
+        try:
+            notify.send_error_sync("FATAL · proceso uvicorn", tb_text)
+        except Exception:  # noqa: BLE001 - already crashing, never mask the original
+            pass
+    sys.__excepthook__(exc_type, exc, tb)
+
+
+sys.excepthook = _fatal_excepthook
 
 # Auto-scan cadence (the "Update" loop from the source tool). 5 min default.
 SCAN_INTERVAL_SECONDS = int(os.getenv("PUMP_SCAN_INTERVAL_SECONDS", "300"))
@@ -56,7 +77,7 @@ SCAN_INTERVAL_SECONDS = int(os.getenv("PUMP_SCAN_INTERVAL_SECONDS", "300"))
 GRID_TICK_SECONDS = int(os.getenv("GRVT_TICK_SECONDS", "15"))
 # Velocity watcher cadence — the fast loop that fires on volume acceleration
 # between slow scans (this is the real-time entry trigger).
-VELOCITY_TICK_SECONDS = int(os.getenv("PUMP_VELOCITY_TICK_SECONDS", "20"))
+VELOCITY_TICK_SECONDS = int(os.getenv("PUMP_VELOCITY_TICK_SECONDS", "10"))
 # Grid→Supabase mirror cadence — copies the embedded GRVTBot state into the
 # shared realtime store. No-op when Supabase or the bot is unavailable.
 GRID_SYNC_SECONDS = int(os.getenv("GRID_SYNC_SECONDS", "60"))
@@ -90,6 +111,9 @@ class TokenCandidate(BaseModel):
     cluster: str = "long_pump"
     score_long_pump: int = 0
     score_classic: int = 0
+    spread_pct: float = 0.0
+    top_book_share: float = 0.0
+    manipulation_suspect: bool = False
     flags: list[str] = Field(default_factory=list)
     spark: list[float] = Field(default_factory=list)
     status: CandidateStatus
@@ -170,6 +194,12 @@ ACCOUNT_POLL_SECONDS = int(os.getenv("PUMP_ACCOUNT_POLL_SECONDS", "120"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Sync_State_on_Startup: rebuild open positions before the loops start so the
+    # exit engine never loses Phase 1/2 context after a restart.
+    try:
+        await _restore_positions()
+    except Exception:
+        logger.exception("startup position restore failed")
     tasks = [
         asyncio.create_task(_auto_scan_loop()),
         asyncio.create_task(_grid_tick_loop()),
@@ -304,10 +334,7 @@ async def _velocity_loop() -> None:
                     candidate.symbol, "velocity_trigger", "paper", candidate,
                     f"vol accel {t.accel:.1f}x @ {t.price}",
                 )
-                await send_telegram(
-                    f"⚡ VOLUME SPIKE {t.symbol} ({t.exchange}) accel {t.accel:.1f}x @ {t.price} — entering"
-                )
-                await _auto_enter(candidate)
+                await _auto_enter(candidate, accel=t.accel)
         except Exception as exc:
             logger.exception("velocity loop failed")
             await notify.send_error("Velocity loop", repr(exc))
@@ -344,6 +371,52 @@ async def _persist_position(pos) -> None:
     })
 
 
+def _open_count() -> int:
+    """Live OPEN managed positions (drives the max-open-trades risk cap)."""
+    return sum(1 for p in list(_pm.positions.values()) if not p.closed)
+
+
+async def _restore_positions() -> None:
+    """Rebuild open positions from Supabase on startup so Phase 1/2 context isn't
+    lost across restarts (Sync_State_on_Startup)."""
+    if not store.enabled():
+        return
+    rows = await store.list_open_positions()
+    restored = 0
+    for r in rows:
+        try:
+            entry_at = datetime.fromisoformat(r["entry_at"]) if r.get("entry_at") else datetime.now(UTC)
+            pos = ManagedPosition(
+                symbol=r["symbol"], exchange=r["exchange"],
+                entry_price=float(r["entry_price"]), qty=float(r["qty"]),
+                initial_qty=float(r.get("initial_qty") or r["qty"]),
+                entry_at=entry_at,
+                peak_price=float(r.get("peak_price") or r["entry_price"]),
+                peak_at=datetime.now(UTC),
+                phase=int(r.get("phase") or 1),
+                realized_pnl=float(r.get("realized_pnl") or 0.0),
+                last_price=float(r.get("last_price") or r["entry_price"]),
+                pump_score=int(r.get("pump_score") or 0),
+                classification=r.get("classification") or "n/a",
+            )
+            _pm.positions[_pm.key(pos.exchange, pos.symbol)] = pos
+            restored += 1
+        except Exception:
+            logger.exception("restore position failed for row %s", r)
+    if restored:
+        logger.info("restored %d open positions from supabase", restored)
+        await notify.send_system(f"🔄 <b>Estado recuperado</b> · {restored} posiciones abiertas reconstruidas")
+    # Rehydrate the equity curve so the chart isn't blank after a restart.
+    try:
+        pts = await store.list_equity(200)
+        if pts:
+            _equity_history.clear()
+            _equity_history.extend({"t": p.get("t"), "v": float(p.get("v") or 0)} for p in pts)
+            logger.info("restored %d equity points", len(pts))
+    except Exception:
+        logger.exception("equity restore failed")
+
+
 async def _handle_exit(pos, event) -> None:
     pct = round(event.fraction * 100)
     _record_learning_raw(
@@ -358,18 +431,24 @@ async def _handle_exit(pos, event) -> None:
         f"{event.reason} {pos.symbol} sold {pct}% @ {event.price}",
         pnl=event.pnl,
     )
-    await send_telegram(
-        f"💰 {event.reason.upper()} {pos.symbol} ({pos.exchange}) sold {pct}% @ {event.price} · pnl {event.pnl:+.2f}"
-    )
     if event.closed:
+        # Full close → close card with overall PnL%.
+        cost = pos.entry_price * pos.initial_qty
+        pnl_pct = (pos.realized_pnl / cost * 100) if cost > 0 else 0.0
         quality = _pm.entry_quality(pos)
         _record_learning_raw(
             pos.symbol, "trade_closed", "paper", pos.pump_score, pos.classification,
             f"realized {pos.realized_pnl:+.2f} · entry {quality}",
         )
         _apply_learning(quality)
-        await send_telegram(
-            f"✅ CLOSED {pos.symbol} · realized {pos.realized_pnl:+.2f} · entry {quality} · threshold now {round(_adaptive_threshold)}"
+        note = f"{quality.upper()} | THRESHOLD: {round(_adaptive_threshold)}"
+        await notify.send_exit(
+            notify.format_exit(pos.symbol, pos.exchange, event.price, pnl_pct, event.reason, note)
+        )
+    else:
+        # Partial take-profit (rest keeps running).
+        await notify.send_entry(
+            notify.format_partial(pos.symbol, pos.exchange, event.price, pct, event.pnl, event.reason)
         )
 
 
@@ -545,6 +624,9 @@ def _to_candidate(scanned: ScannedCandidate) -> TokenCandidate:
         cluster=scanned.cluster,
         score_long_pump=scanned.score_long_pump,
         score_classic=scanned.score_classic,
+        spread_pct=scanned.spread_pct,
+        top_book_share=scanned.top_book_share,
+        manipulation_suspect=scanned.manipulation_suspect,
         flags=scanned.flags,
         spark=scanned.spark,
         status=_status_for(scanned.pump_score),
@@ -567,11 +649,29 @@ def _scan_exchanges() -> list[str]:
     return [e.strip().lower() for e in raw.split(",") if e.strip()]
 
 
-async def _auto_enter(candidate: TokenCandidate) -> None:
-    """Paper-only auto buy on a confirmed candidate; hand it to the exit engine."""
+async def _auto_enter(candidate: TokenCandidate, accel: float | None = None) -> None:
+    """Paper-only auto buy on a confirmed candidate; hand it to the exit engine.
+
+    Runs the ForensicFilter gate first (real CEX-sourced spread/liquidity/book
+    checks). A blocked candidate is logged and skipped — never bought."""
+    ok, reasons = forensic_check(
+        spread_pct=candidate.spread_pct,
+        liquidity_usd=candidate.liquidity_usd,
+        top_book_share=candidate.top_book_share,
+    )
+    if not ok:
+        _record_learning(candidate.symbol, "forensic_block", "paper", candidate, "; ".join(reasons))
+        await store.insert_bot_log(
+            "PUMP_SCANNER", "INFO",
+            f"ForensicFilter bloqueó {candidate.symbol}: {'; '.join(reasons)}",
+        )
+        logger.info("forensic block %s: %s", candidate.symbol, reasons)
+        return
+
     result = await _engine.act(
         symbol=candidate.symbol, side=Side.buy, reference_price=candidate.last_price,
         capital_usd=AUTO_ENTRY_USD, exchanges=[candidate.exchange],
+        open_trades=_open_count(),
     )
     for fill in result.fills:
         _pm.open(
@@ -587,9 +687,44 @@ async def _auto_enter(candidate: TokenCandidate) -> None:
             f"Auto-entry {candidate.symbol} ${AUTO_ENTRY_USD:.0f} @ {fill.fill_price}",
             volumen=candidate.volume_spike,
         )
-        await send_telegram(
-            f"🚨 ENTRY {candidate.symbol} ({candidate.exchange}) score {candidate.pump_score} · ${AUTO_ENTRY_USD:.0f} @ {fill.fill_price}"
-        )
+        await notify.send_entry(notify.format_entry(
+            symbol=candidate.symbol, exchange=candidate.exchange, price=fill.fill_price,
+            accel=accel if accel is not None else candidate.volume_spike,
+            score=candidate.pump_score, classification=candidate.classification,
+            flags=candidate.flags, dump_pct=DUMP_TICK_PCT,
+            timeout_min=TIMEOUT_MINUTES, be_pct=BREAKEVEN_PCT,
+        ))
+    for rej in result.rejected:
+        logger.info("auto-entry rejected %s: %s", candidate.symbol, rej)
+
+
+# Cross-exchange arbitrage detection threshold (%). Detection only — executing
+# arbitrage needs funded balances on BOTH venues + live keys, so paper mode
+# alerts without trading (no fabricated cross-venue fills).
+ARB_SPREAD_PCT = float(os.getenv("PUMP_ARB_SPREAD_PCT", "1.5"))
+
+
+async def _arbitrage_scan() -> None:
+    """Same symbol on 2+ scanned exchanges with a price gap >= ARB_SPREAD_PCT →
+    alert. Real prices from the scan; no execution in paper."""
+    by_symbol: dict[str, list[TokenCandidate]] = {}
+    for c in _candidates.values():
+        if c.last_price > 0:
+            by_symbol.setdefault(c.symbol, []).append(c)
+    for sym, lst in by_symbol.items():
+        if len(lst) < 2:
+            continue
+        lo = min(lst, key=lambda c: c.last_price)
+        hi = max(lst, key=lambda c: c.last_price)
+        if lo.last_price <= 0 or lo.exchange == hi.exchange:
+            continue
+        spread = (hi.last_price - lo.last_price) / lo.last_price * 100
+        if spread >= ARB_SPREAD_PCT:
+            await notify.send_arbitrage(sym, lo.exchange, lo.last_price, hi.exchange, hi.last_price, spread)
+            await store.insert_bot_log(
+                "PUMP_SCANNER", "INFO",
+                f"Arbitraje {sym}: {lo.exchange}@{lo.last_price:g} → {hi.exchange}@{hi.last_price:g} ({spread:.2f}%)",
+            )
 
 
 async def _perform_scan(min_pump_score: int = 1) -> ScanResponse:
@@ -600,9 +735,11 @@ async def _perform_scan(min_pump_score: int = 1) -> ScanResponse:
         candidate = _to_candidate(item)
         _candidates[f"{candidate.exchange}:{candidate.symbol}"] = candidate
         if candidate.status == CandidateStatus.waiting_confirmation:
-            await send_telegram(
-                format_alert(candidate.symbol, candidate.pump_score, candidate.classification, candidate.flags)
-            )
+            await notify.send_alert(format_alert(
+                candidate.symbol, candidate.pump_score, candidate.classification,
+                candidate.flags, cluster=candidate.cluster, exchange=candidate.exchange,
+                liquidity_usd=candidate.liquidity_usd,
+            ))
             await store.insert_alert({
                 "symbol": candidate.symbol, "exchange": candidate.exchange,
                 "pump_score": candidate.pump_score, "classification": candidate.classification,
@@ -610,7 +747,7 @@ async def _perform_scan(min_pump_score: int = 1) -> ScanResponse:
             })
             await store.insert_pump_candidate({
                 "symbol": candidate.symbol, "exchange": candidate.exchange.upper(),
-                "current_spread": None, "volume_acceleration": candidate.volume_spike,
+                "current_spread": candidate.spread_pct, "volume_acceleration": candidate.volume_spike,
                 "status": "TRIGGERED",
             })
             await store.insert_bot_log(
@@ -630,6 +767,11 @@ async def _perform_scan(min_pump_score: int = 1) -> ScanResponse:
             )
             if AUTO_ENTRY and current_mode() == ExecMode.paper and not _pm.has(candidate.exchange, candidate.symbol):
                 await _auto_enter(candidate)
+    # Cross-exchange arbitrage detection (alert-only in paper).
+    try:
+        await _arbitrage_scan()
+    except Exception:
+        logger.exception("arbitrage scan failed")
     _last_scan_at = datetime.now(UTC)
     # Persist the scan snapshot (no-op without Supabase keys).
     await store.upsert_candidates([
@@ -679,7 +821,7 @@ async def status() -> dict:
         "last_scan_at": _last_scan_at.isoformat() if _last_scan_at else None,
         "candidate_count": len(_candidates),
         "kill_switch_active": _guard.kill_switch,
-        "open_positions": len(_engine.positions),
+        "open_positions": _open_count(),
         "persistence": "supabase" if store.enabled() else "memory",
         "account_connected": _real_account.get("connected", []),
     }
@@ -802,7 +944,7 @@ async def overview() -> dict:
             "classic": _cluster_stats("classic"),
             "long_pump": _cluster_stats("long_pump"),
         },
-        "open_positions": len(_engine.positions),
+        "open_positions": _open_count(),
         "balance": _real_account["total_usdt"] if _real_account.get("has_keys") else _paper_equity(),
         "balance_source": "live_account" if _real_account.get("has_keys") else "paper",
         "account_connected": _real_account.get("connected", []),
@@ -954,6 +1096,7 @@ async def act_on_candidate(symbol: str, capital_usd: float = 100.0, exchange: st
         reference_price=candidate.last_price,
         capital_usd=capital_usd,
         exchanges=[candidate.exchange],
+        open_trades=_open_count(),
     )
 
     for fill in result.fills:
@@ -961,6 +1104,9 @@ async def act_on_candidate(symbol: str, capital_usd: float = 100.0, exchange: st
             symbol=fill.symbol, exchange=fill.exchange, entry_price=fill.fill_price,
             qty=fill.amount, pump_score=candidate.pump_score, classification=candidate.classification,
         )
+        opened = _pm.positions.get(_pm.key(fill.exchange, fill.symbol))
+        if opened:
+            await _persist_position(opened)
 
     detail = (
         f"{len(result.fills)} fills, {len(result.rejected)} rejected"
@@ -1062,6 +1208,54 @@ async def update_settings(req: SettingsRequest) -> dict:
     for c in _candidates.values():
         c.status = _status_for(c.pump_score)
     return _settings_payload()
+
+
+@app.get("/pnl/breakdown")
+async def pnl_breakdown() -> dict:
+    """Per-token P&L over the last 7d: realized exits + open unrealized, so the
+    PNL 7D widget can show which tokens are winning/losing. All from real managed
+    positions — nothing invented."""
+    cutoff = datetime.now(UTC).timestamp() - 7 * 86400
+    by: dict[str, dict] = {}
+
+    def _row(exchange: str, symbol: str) -> dict:
+        k = f"{exchange}:{symbol}"
+        return by.setdefault(k, {
+            "symbol": symbol, "exchange": exchange,
+            "realized": 0.0, "unrealized": 0.0, "trades": 0, "open": False,
+        })
+
+    for e in _pm.history:
+        try:
+            ts = datetime.fromisoformat(e.at).timestamp()
+        except Exception:
+            ts = cutoff
+        if ts < cutoff:
+            continue
+        d = _row(e.exchange, e.symbol)
+        d["realized"] += e.pnl
+        d["trades"] += 1
+    for p in list(_pm.positions.values()):
+        if p.closed or p.last_price <= 0:
+            continue
+        d = _row(p.exchange, p.symbol)
+        d["unrealized"] += (p.last_price - p.entry_price) * p.qty
+        d["open"] = True
+
+    rows = []
+    for d in by.values():
+        d["total"] = round(d["realized"] + d["unrealized"], 2)
+        d["realized"] = round(d["realized"], 2)
+        d["unrealized"] = round(d["unrealized"], 2)
+        rows.append(d)
+    rows.sort(key=lambda r: r["total"], reverse=True)
+    return {
+        "rows": rows,
+        "winners": sum(1 for r in rows if r["total"] > 0),
+        "losers": sum(1 for r in rows if r["total"] < 0),
+        "total": round(sum(r["total"] for r in rows), 2),
+        "pnl_7d": _pnl_7d(),
+    }
 
 
 @app.get("/learning")

@@ -120,7 +120,7 @@ WorkingDirectory=$GRVT_DIR
 EnvironmentFile=$GENV
 ExecStart=/usr/bin/node packages/bot/dist/dashboard/server.js
 Restart=always
-RestartSec=5
+RestartSec=10
 User=$RUN_USER
 
 [Install]
@@ -132,18 +132,33 @@ sudo tee "/etc/systemd/system/$SERVICE.service" >/dev/null <<UNIT
 Description=TradeOS AI Pump Reader
 After=network.target $GRID_SERVICE.service
 Wants=$GRID_SERVICE.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 WorkingDirectory=$APP_DIR/apps/pump-reader
 EnvironmentFile=$ENV_FILE
 ExecStart=$VENV/bin/uvicorn app.main:app --host 0.0.0.0 --port $PORT
 Restart=always
-RestartSec=5
+RestartSec=10
 User=$RUN_USER
+SyslogIdentifier=$SERVICE
 
 [Install]
 WantedBy=multi-user.target
 UNIT
+
+echo "==> [8b/8] Log rotation (journald size caps) + hourly health-check cron"
+sudo mkdir -p /etc/systemd/journald.conf.d
+sudo cp "$APP_DIR/deploy/journald-tradeos.conf" /etc/systemd/journald.conf.d/tradeos.conf
+sudo systemctl restart systemd-journald || true
+# Scripts must be executable + readable by the run user.
+chmod +x "$APP_DIR/deploy/"*.sh "$APP_DIR/deploy/health_check.py" 2>/dev/null || true
+# Hourly watchdog: restart the service if the API is down AND logs are stale.
+sudo touch /var/log/tradeos-health.log
+sudo chown "$RUN_USER" /var/log/tradeos-health.log || true
+CRON_LINE="0 * * * * /usr/bin/python3 $APP_DIR/deploy/health_check.py >> /var/log/tradeos-health.log 2>&1"
+( sudo crontab -l 2>/dev/null | grep -v health_check.py; echo "$CRON_LINE" ) | sudo crontab -
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now "$GRID_SERVICE"

@@ -52,10 +52,16 @@ _RESP_STRIP = {
 
 _client: httpx.AsyncClient | None = None
 
-# Injected into the GRVTBot dashboard HTML so it matches the ScamPump Radar theme
-# (same dark palette + pink/purple accents) and drops the default scrollbar — the
-# grid section then reads as one integrated app, not a separate site.
-_THEME_CSS = b"""<style id="tradeos-theme">
+# Injected into the GRVTBot dashboard HTML so the embedded bot reads as one
+# integrated app, not a separate site:
+#   - matches the ScamPump palette (dark) + a light variant the parent drives,
+#   - HIDES the GRVTBot's own top header bar (logo/Offline/ES-EN/theme) — the
+#     TradeOS topbar already provides those, so a second bar looked like a jump
+#     to a different app,
+#   - drops the default scrollbar,
+#   - a tiny listener flips light/dark on postMessage from the parent, so ONE
+#     theme toggle in the TradeOS topbar controls both sides.
+_THEME_CSS = """<style id="tradeos-theme">
 @import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap');
 :root,.dark,html.dark{
   --color-bg-base:#070a0f!important;--color-bg-surface:#0c1018!important;
@@ -68,10 +74,40 @@ _THEME_CSS = b"""<style id="tradeos-theme">
   --color-primary-soft:#2a0d17!important;--color-info:#7c6cff!important;
   --color-chart-1:#7c6cff!important;--color-chart-4:#a78bfa!important;--color-chart-5:#ff2f6e!important;
 }
-html,body,#root{background:#070a0f!important;font-family:Geist,system-ui,-apple-system,sans-serif!important}
+/* light mode — driven by the parent (postMessage / ?theme=light) */
+html.tradeos-light{
+  --color-bg-base:#eef1f7!important;--color-bg-surface:#ffffff!important;
+  --color-bg-elevated:#f6f8fc!important;--color-bg-muted:#eaeef6!important;
+  --color-border-subtle:#dce2ec!important;--color-border-default:#d7deea!important;
+  --color-border-strong:#c2cad9!important;
+  --color-text-primary:#0f1622!important;--color-text-secondary:#2f3a4d!important;
+  --color-text-muted:#7a869b!important;--color-text-disabled:#aab3c2!important;
+  --color-primary:#ff2f6e!important;--color-primary-strong:#ff5a86!important;
+  --color-primary-soft:#ffe3ec!important;--color-info:#7c6cff!important;
+}
+html,body,#root{font-family:Geist,system-ui,-apple-system,sans-serif!important}
+html.dark,html.dark body,html.dark #root,:root #root{background:var(--color-bg-base)!important}
+html.tradeos-light,html.tradeos-light body,html.tradeos-light #root{background:#eef1f7!important}
+/* hide the GRVTBot's own top header bar — TradeOS already shows one */
+#root > div > header{display:none!important}
+/* make the grid sidebar read like the ScamPump sidebar (same width + item
+   sizing — the grid one looked bigger). 212px / 13px nav like the pump side. */
+#root aside{width:212px!important;padding:16px 12px!important;gap:4px!important}
+#root aside a,#root aside button{font-size:13px!important;font-weight:500!important;
+  padding:8px 10px!important;border-radius:8px!important;gap:10px!important;letter-spacing:-.01em!important}
+#root aside a svg,#root aside button svg{width:15px!important;height:15px!important}
 *{scrollbar-width:none!important;-ms-overflow-style:none!important}
 *::-webkit-scrollbar{width:0!important;height:0!important;display:none!important}
-</style>"""
+</style>
+<script id="tradeos-theme-sync">
+(function(){
+  function apply(t){ try{ document.documentElement.classList.toggle('tradeos-light', t==='light'); }catch(e){} }
+  window.addEventListener('message', function(e){
+    if(e && e.data && e.data.tradeosTheme){ apply(e.data.tradeosTheme); }
+  });
+  try{ var m=String(location.search||'').match(/[?&]theme=(light|dark)/); if(m){ apply(m[1]); } }catch(e){}
+})();
+</script>""".encode("utf-8")
 
 
 def _get_client() -> httpx.AsyncClient:

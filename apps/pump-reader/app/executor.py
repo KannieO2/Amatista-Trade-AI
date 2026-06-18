@@ -206,6 +206,7 @@ class ExecutionEngine:
         capital_usd: float,
         exchanges: list[str] | None = None,
         order_type: OrderType = OrderType.market,
+        open_trades: int | None = None,
     ) -> ExecutionResult:
         mode = current_mode()
         # Default: trade on the venue(s) where the token actually lists.
@@ -219,12 +220,15 @@ class ExecutionEngine:
         per_leg = capital_usd / len(exchanges)
         sl = reference_price * (1 - STOP_LOSS_PCT / 100)
         tp = reference_price * (1 + TAKE_PROFIT_PCT / 100)
+        # Caller passes the live OPEN-position count (lifetime fills would block
+        # entries forever once the cap is hit). Fall back to lifetime fills.
+        base_open = open_trades if open_trades is not None else len(self.positions)
 
-        for exchange in exchanges:
+        for idx, exchange in enumerate(exchanges):
             ctx = RiskContext(
                 position_size_usd=per_leg,
                 leverage=1.0,
-                open_trades=len(self.positions),
+                open_trades=base_open + idx,
             )
             decision = await self.guard.evaluate(ctx, live=mode == ExecMode.live)
             if not decision.allowed:

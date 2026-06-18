@@ -10,6 +10,7 @@ omitted, not faked.
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass, field
 from statistics import mean
 
@@ -41,6 +42,20 @@ LOW_LIQUIDITY_USD = 75_000
 # Score at/above which a candidate needs human confirmation in the UI.
 WAITING_CONFIRMATION_THRESHOLD = 75
 
+# --- ForensicFilter (CEX-applicable pre-trade safety) -------------------------
+# IMPORTANT honesty note: on a centralized exchange you trade against the venue's
+# orderbook, NOT a token contract. So DEX-only checks (honeypot / liquidity
+# burned / buy-sell tax / holder list) have no source here and are NOT faked.
+# What IS measurable from public CEX data is enforced below:
+#   - spread (ask-bid)/ask too wide  → illiquid / unsafe fill
+#   - resting liquidity below a floor → can't exit without slippage
+#   - book concentrated in <=3 levels → spoof / single-actor manipulation proxy
+# (For true on-chain DEX tokens, wire GoPlus/DexScreener via a contract-address
+#  map; left as an explicit optional hook rather than guessed.)
+FORENSIC_MAX_SPREAD_PCT = float(os.getenv("PUMP_FORENSIC_MAX_SPREAD_PCT", "2.0"))
+FORENSIC_MIN_LIQUIDITY_USD = float(os.getenv("PUMP_FORENSIC_MIN_LIQUIDITY_USD", "20000"))
+FORENSIC_MAX_TOP_SHARE = float(os.getenv("PUMP_FORENSIC_MAX_TOP_SHARE", "0.85"))
+
 
 @dataclass
 class ScannedCandidate:
@@ -58,6 +73,9 @@ class ScannedCandidate:
     cluster: str = "long_pump"
     score_long_pump: int = 0
     score_classic: int = 0
+    spread_pct: float = 0.0           # (ask-bid)/ask, forensic spread filter
+    top_book_share: float = 0.0       # share of bid book in top-3 levels (concentration)
+    manipulation_suspect: bool = False
     flags: list[str] = field(default_factory=list)
     spark: list[float] = field(default_factory=list)
 
@@ -106,6 +124,42 @@ def _orderbook_metrics(order_book: dict) -> tuple[float, float]:
     total = bid_notional + ask_notional
     imbalance = bid_notional / total if total > 0 else 0.5
     return imbalance, total
+
+
+def _forensic_metrics(order_book: dict) -> tuple[float, float]:
+    """Return (spread_pct, top3_bid_share) from the public CEX orderbook.
+
+    spread_pct   = (best_ask - best_bid) / best_ask * 100
+    top3_bid_share = notional in the best 3 bid levels / total bid notional.
+    A high share means a thin book held up by a few orders — the CEX-visible
+    proxy for single-actor manipulation (we cannot see wallets on a CEX).
+    """
+    bids = order_book.get("bids") or []
+    asks = order_book.get("asks") or []
+    if not bids or not asks:
+        return 100.0, 1.0  # no book = treat as maximally unsafe
+    best_bid = bids[0][0]
+    best_ask = asks[0][0]
+    spread_pct = (best_ask - best_bid) / best_ask * 100 if best_ask > 0 else 100.0
+    bid_notional = [p * a for p, a in bids]
+    total_bid = sum(bid_notional)
+    top3 = sum(sorted(bid_notional, reverse=True)[:3])
+    top_share = top3 / total_bid if total_bid > 0 else 1.0
+    return round(spread_pct, 4), round(top_share, 4)
+
+
+def forensic_check(*, spread_pct: float, liquidity_usd: float,
+                   top_book_share: float) -> tuple[bool, list[str]]:
+    """Pre-trade gate. Returns (ok_to_enter, reasons_if_blocked). Real, auditable,
+    CEX-sourced — no fabricated on-chain data."""
+    reasons: list[str] = []
+    if spread_pct > FORENSIC_MAX_SPREAD_PCT:
+        reasons.append(f"spread {spread_pct:.2f}% > {FORENSIC_MAX_SPREAD_PCT}%")
+    if liquidity_usd < FORENSIC_MIN_LIQUIDITY_USD:
+        reasons.append(f"liquidity ${liquidity_usd:,.0f} < ${FORENSIC_MIN_LIQUIDITY_USD:,.0f}")
+    if top_book_share > FORENSIC_MAX_TOP_SHARE:
+        reasons.append(f"book {top_book_share*100:.0f}% in top-3 levels (MANIPULATION_SUSPECT)")
+    return (not reasons), reasons
 
 
 def _volume_spike(ohlcv: list[list[float]]) -> float:
@@ -237,6 +291,7 @@ async def _deep_scan_symbol(
 
     spike = _volume_spike(ohlcv)
     imbalance, liquidity = _orderbook_metrics(order_book)
+    spread_pct, top_share = _forensic_metrics(order_book)
     price_change = float(ticker.get("percentage") or 0.0)
 
     pump_score, confidence, classification, flags, score_long_pump, score_classic, cluster = score_candidate(
@@ -245,6 +300,20 @@ async def _deep_scan_symbol(
         imbalance=imbalance,
         liquidity_usd=liquidity,
     )
+
+    # ForensicFilter: flag (don't fake) manipulation tells from real book data.
+    ok, reasons = forensic_check(
+        spread_pct=spread_pct, liquidity_usd=liquidity, top_book_share=top_share
+    )
+    manipulation_suspect = top_share > FORENSIC_MAX_TOP_SHARE
+    if not ok:
+        flags.append("forensic_block")
+    if manipulation_suspect and "manipulation_suspect" not in flags:
+        flags.append("manipulation_suspect")
+        if classification not in ("no_signal",):
+            classification = "manipulation_suspect"
+    if spread_pct > FORENSIC_MAX_SPREAD_PCT:
+        flags.append("wide_spread")
 
     # Last 12 closed-candle closes for the UI sparkline.
     closes = [row[4] for row in ohlcv[:-1] if row and row[4] is not None]
@@ -265,6 +334,9 @@ async def _deep_scan_symbol(
         cluster=cluster,
         score_long_pump=score_long_pump,
         score_classic=score_classic,
+        spread_pct=spread_pct,
+        top_book_share=top_share,
+        manipulation_suspect=manipulation_suspect,
         flags=flags,
         spark=spark,
     )

@@ -95,12 +95,52 @@ async def upsert_position(pos: dict) -> None:
     await _upsert("managed_positions", pos, on_conflict="key")
 
 
+async def list_open_positions() -> list[dict]:
+    """Read back the still-open managed positions so the bot can rebuild its
+    in-memory state on startup (Phase 1/2 context survives a restart)."""
+    client = await _get_client()
+    if client is None:
+        return []
+    try:
+        r = await client.get(
+            "/managed_positions",
+            headers=_headers(),
+            params={"closed": "eq.false", "select": "*"},
+        )
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, list) else []
+    except Exception:
+        logger.exception("supabase read managed_positions failed")
+        return []
+
+
 async def insert_exit(event: dict) -> None:
     await _insert("exit_events", event)
 
 
 async def insert_equity(point: dict) -> None:
     await _insert("equity_history", point)
+
+
+async def list_equity(limit: int = 200) -> list[dict]:
+    """Last `limit` equity points (oldest→newest) to rehydrate the curve on
+    startup so it survives restarts."""
+    client = await _get_client()
+    if client is None:
+        return []
+    try:
+        r = await client.get(
+            "/equity_history",
+            headers=_headers(),
+            params={"select": "t,v", "order": "t.desc", "limit": str(limit)},
+        )
+        r.raise_for_status()
+        data = r.json()
+        return list(reversed(data)) if isinstance(data, list) else []
+    except Exception:
+        logger.exception("supabase read equity_history failed")
+        return []
 
 
 async def insert_alert(alert: dict) -> None:
