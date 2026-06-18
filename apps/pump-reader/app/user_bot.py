@@ -17,6 +17,8 @@ from .position_manager import PositionManager
 from .risk import RiskGuard
 
 PAPER_BALANCE = float(os.getenv("PUMP_PAPER_BALANCE", "1000"))
+AUTO_ENTRY_DEFAULT = os.getenv("PUMP_AUTO_ENTRY", "true").lower() == "true"
+AUTO_ENTRY_USD_DEFAULT = float(os.getenv("PUMP_AUTO_ENTRY_USD", "100"))
 
 
 def default_allocation() -> dict:
@@ -34,6 +36,10 @@ class UserBot:
         self.pm = PositionManager()
         self.equity_history: list[dict] = []
         self.allocation: dict = default_allocation()
+        # Per-user trading preferences (each account controls its OWN bot). The
+        # confirmation threshold stays global (shared brain) — see main.py.
+        self.auto_entry: bool = AUTO_ENTRY_DEFAULT
+        self.auto_entry_usd: float = AUTO_ENTRY_USD_DEFAULT
         # Real read-only balance — only populated for an account whose exchange
         # keys are set (today: the owner). Others stay paper (has_keys=False).
         self.real_account: dict = {"has_keys": False, "total_usdt": 0.0, "connected": [], "snapshots": []}

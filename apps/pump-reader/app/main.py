@@ -329,16 +329,17 @@ async def _velocity_loop() -> None:
                 candidate = _candidates.get(key)
                 if candidate is None:
                     continue
-                if not (AUTO_ENTRY and current_mode() == ExecMode.paper):
+                if current_mode() != ExecMode.paper:
                     continue
                 candidate.last_price = t.price  # fire at the fresh trigger price
                 _record_learning(
                     candidate.symbol, "velocity_trigger", "paper", candidate,
                     f"vol accel {t.accel:.1f}x @ {t.price}",
                 )
-                # Every user's bot enters independently (skip ones already in it).
+                # Every user's bot enters independently — only if THAT user has
+                # auto-entry on and isn't already in the symbol.
                 for bot in all_bots():
-                    if not bot.pm.has(t.exchange, t.symbol):
+                    if bot.auto_entry and not bot.pm.has(t.exchange, t.symbol):
                         await _auto_enter(bot, candidate, accel=t.accel)
         except Exception as exc:
             logger.exception("velocity loop failed")
@@ -519,6 +520,10 @@ ADMIN_USERS_HTML = """<!doctype html><html lang="es"><head><meta charset="utf-8"
     <h2>Cuentas existentes</h2>
     <table><thead><tr><th>Usuario</th><th>Rol</th><th>Estado</th><th></th></tr></thead><tbody id="rows"></tbody></table>
   </div>
+  <div class="card">
+    <h2>Resumen de bots · todas las cuentas</h2>
+    <table><thead><tr><th>Usuario</th><th>Balance</th><th>Abiertas</th><th>PnL 7d</th><th>Auto</th></tr></thead><tbody id="ovrows"></tbody></table>
+  </div>
 </div>
 <script>
 async function load(){
@@ -556,7 +561,19 @@ async function resetPw(id){
   const r=await fetch('/admin/users/'+id+'/password',{method:'POST',body:fd}); const d=await r.json();
   if(!d.ok) alert(d.error||'Error');
 }
-load();
+async function loadOverview(){
+  const r=await fetch('/admin/overview'); const d=await r.json();
+  const tb=document.getElementById('ovrows'); tb.innerHTML='';
+  for(const a of d.accounts){
+    const pnl=(a.pnl_7d>=0?'+':'')+Number(a.pnl_7d).toFixed(2);
+    const cls=a.pnl_7d>0?'on':(a.pnl_7d<0?'off':'');
+    const tr=document.createElement('tr');
+    tr.innerHTML='<td>'+a.username+'</td><td>$'+Number(a.balance).toFixed(2)+'</td><td>'+a.open_positions
+      +'</td><td><span class="tag '+cls+'">'+pnl+'</span></td><td>'+(a.auto_entry?'on':'off')+'</td>';
+    tb.appendChild(tr);
+  }
+}
+load(); loadOverview(); setInterval(loadOverview, 15000);
 </script></body></html>"""
 
 
@@ -656,6 +673,21 @@ async def admin_reset_password(user_id: str, password: str = Form(...)) -> JSONR
     except ValueError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     return JSONResponse({"ok": True})
+
+
+@app.get("/admin/overview")
+async def admin_overview() -> dict:
+    """Every account's bot at a glance (admin only). Balance / open positions /
+    7d P&L per user — so the owner can see all accounts in one place."""
+    rows = []
+    for u in auth_mod.list_users():
+        b = get_bot(u["id"])
+        rows.append({
+            "username": u["username"], "role": u["role"], "active": u.get("active", True),
+            "balance": b.balance(), "open_positions": b.open_count(),
+            "pnl_7d": b.pnl_7d(), "auto_entry": b.auto_entry,
+        })
+    return {"accounts": rows, "count": len(rows)}
 
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -849,7 +881,7 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
 
     result = await bot.engine.act(
         symbol=candidate.symbol, side=Side.buy, reference_price=candidate.last_price,
-        capital_usd=AUTO_ENTRY_USD, exchanges=[candidate.exchange],
+        capital_usd=bot.auto_entry_usd, exchanges=[candidate.exchange],
         open_trades=bot.open_count(),
     )
     for fill in result.fills:
@@ -860,10 +892,10 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
         opened = bot.pm.positions.get(bot.pm.key(fill.exchange, fill.symbol))
         if opened:
             await _persist_position(bot, opened)
-        _record_learning(candidate.symbol, "auto_entry", "paper", candidate, f"bought ${AUTO_ENTRY_USD:.0f} @ {fill.fill_price}")
+        _record_learning(candidate.symbol, "auto_entry", "paper", candidate, f"bought ${bot.auto_entry_usd:.0f} @ {fill.fill_price}")
         await store.insert_bot_log(
             "PUMP_SCANNER", "TRADE_BUY",
-            f"Auto-entry {candidate.symbol} ${AUTO_ENTRY_USD:.0f} @ {fill.fill_price}",
+            f"Auto-entry {candidate.symbol} ${bot.auto_entry_usd:.0f} @ {fill.fill_price}",
             volumen=candidate.volume_spike,
         )
         await notify.send_entry(notify.format_entry(
@@ -944,10 +976,11 @@ async def _perform_scan(min_pump_score: int = 1) -> ScanResponse:
                     "liquidity_usd": candidate.liquidity_usd,
                 },
             )
-            if AUTO_ENTRY and current_mode() == ExecMode.paper:
-                # Each user's bot enters independently (own balance/caps).
+            if current_mode() == ExecMode.paper:
+                # Each user's bot enters independently (own balance/caps), only if
+                # that user has auto-entry enabled.
                 for bot in all_bots():
-                    if not bot.pm.has(candidate.exchange, candidate.symbol):
+                    if bot.auto_entry and not bot.pm.has(candidate.exchange, candidate.symbol):
                         await _auto_enter(bot, candidate)
     # Cross-exchange arbitrage detection (alert-only in paper).
     try:
@@ -1314,7 +1347,7 @@ async def list_managed(request: Request) -> dict:
         "open": open_positions,
         "exits": [e.__dict__ for e in reversed(bot.pm.history[-20:])],
         "adaptive_threshold": round(_adaptive_threshold, 1),
-        "auto_entry": AUTO_ENTRY,
+        "auto_entry": bot.auto_entry,
     }
 
 
@@ -1337,11 +1370,14 @@ class SettingsRequest(BaseModel):
     auto_entry_usd: float | None = Field(default=None, ge=1)
 
 
-def _settings_payload() -> dict:
+def _settings_payload(bot: UserBot, role: str = "operator") -> dict:
     return {
+        # Shared brain (read-only for operators; only admin can tune it).
         "confirmation_threshold": round(_adaptive_threshold, 1),
-        "auto_entry": AUTO_ENTRY,
-        "auto_entry_usd": AUTO_ENTRY_USD,
+        "threshold_editable": role == "admin",
+        # Per-user trading preferences.
+        "auto_entry": bot.auto_entry,
+        "auto_entry_usd": bot.auto_entry_usd,
         "scan_interval_seconds": SCAN_INTERVAL_SECONDS,
         "velocity_accel_factor": _velocity.status().get("accel_factor"),
         "exec_mode": current_mode().value,
@@ -1350,25 +1386,29 @@ def _settings_payload() -> dict:
 
 
 @app.get("/settings")
-async def get_settings() -> dict:
-    return _settings_payload()
+async def get_settings(request: Request) -> dict:
+    user = getattr(request.state, "user", None) or {}
+    return _settings_payload(_req_bot(request), user.get("role", "operator"))
 
 
 @app.post("/settings")
-async def update_settings(req: SettingsRequest) -> dict:
-    """Live bot configuration. Lowering the confirmation threshold makes the bot
-    more sensitive (more alerts + paper auto-entries)."""
-    global _adaptive_threshold, AUTO_ENTRY, AUTO_ENTRY_USD
-    if req.confirmation_threshold is not None:
+async def update_settings(req: SettingsRequest, request: Request) -> dict:
+    """Live bot config. auto_entry / auto_entry_usd are PER-USER (each account
+    controls its own bot). The confirmation threshold is the shared brain, so
+    only an admin may change it."""
+    global _adaptive_threshold
+    user = getattr(request.state, "user", None) or {}
+    bot = _req_bot(request)
+    if req.confirmation_threshold is not None and user.get("role") == "admin":
         _adaptive_threshold = float(req.confirmation_threshold)
+        # Re-evaluate candidate statuses so the Alerts view reflects it now.
+        for c in _candidates.values():
+            c.status = _status_for(c.pump_score)
     if req.auto_entry is not None:
-        AUTO_ENTRY = bool(req.auto_entry)
+        bot.auto_entry = bool(req.auto_entry)
     if req.auto_entry_usd is not None:
-        AUTO_ENTRY_USD = float(req.auto_entry_usd)
-    # Re-evaluate candidate statuses so the Alerts view reflects the change now.
-    for c in _candidates.values():
-        c.status = _status_for(c.pump_score)
-    return _settings_payload()
+        bot.auto_entry_usd = float(req.auto_entry_usd)
+    return _settings_payload(bot, user.get("role", "operator"))
 
 
 @app.get("/pnl/breakdown")
@@ -1448,3 +1488,22 @@ async def set_kill_switch(request: Request, active: bool, reason: str = "manual"
     bot = _req_bot(request)
     bot.guard.set_kill_switch(active, reason)
     return {"kill_switch_active": bot.guard.kill_switch, "reason": bot.guard.kill_reason}
+
+
+@app.post("/reset")
+async def reset_my_bot(request: Request) -> dict:
+    """Reset the logged-in user's OWN bot: close every open position (freeing the
+    capital) and clear the in-memory equity curve. Keeps the shared learning and
+    this user's history. Does not touch any other account."""
+    bot = _req_bot(request)
+    closed = 0
+    for pos in list(bot.pm.positions.values()):
+        if not pos.closed:
+            pos.closed = True
+            pos.qty = 0.0
+            await _persist_position(bot, pos)  # marks closed=true in Supabase
+            closed += 1
+    bot.pm.positions.clear()
+    bot.equity_history.clear()
+    bot.guard.set_kill_switch(False, "reset")
+    return {"ok": True, "closed": closed}

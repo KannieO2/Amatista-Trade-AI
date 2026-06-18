@@ -515,6 +515,7 @@ DASHBOARD_HTML = r"""<!doctype html>
         </div>
         <div class="gactions">
           <button class="btn primary" id="cfg-save">Save configuration</button>
+          <button class="btn" id="cfg-reset" style="border-color:rgba(232,85,106,.4);color:var(--red)">Reset mi bot</button>
           <span class="px" id="cfg-msg"></span>
         </div>
         <div class="empty" style="text-align:left;padding:10px 0 0">Lower the confirmation threshold to make the bot more sensitive — more alerts and paper auto-entries. 75 = strict (default). Live real-money trading still requires your API keys and explicit opt-in.</div>
@@ -1069,6 +1070,9 @@ async function loadSettings(){
   try{
     const cfg=await (await fetch("/settings")).json();
     $("cfg-thr").value=cfg.confirmation_threshold;
+    // Confirmation threshold is the SHARED brain — only admins may change it.
+    $("cfg-thr").disabled = !cfg.threshold_editable;
+    $("cfg-thr").title = cfg.threshold_editable ? "" : "Umbral del cerebro compartido — solo admin";
     $("cfg-auto").value=String(cfg.auto_entry);
     $("cfg-size").value=cfg.auto_entry_usd;
     $("cfg-accel").value=cfg.velocity_accel_factor+"x";
@@ -1116,10 +1120,17 @@ async function saveConfig(){
   }catch(e){ $("cfg-msg").textContent="error"; }
 }
 async function killSwitch(active){ try{ await fetch(`/risk/kill-switch?active=${active}&reason=manual`,{method:"POST"}); loadSettings(); }catch(e){} }
+async function resetBot(){
+  if(!confirm("¿Reset de TU bot? Cierra tus posiciones abiertas y limpia tu curva de equidad. El aprendizaje compartido se conserva. No afecta a otras cuentas.")) return;
+  $("cfg-msg").textContent="reset…";
+  try{ const r=await (await fetch("/reset",{method:"POST"})).json(); $("cfg-msg").textContent=`reset ✓ (${r.closed} cerradas)`; loadSettings(); }
+  catch(e){ $("cfg-msg").textContent="error"; }
+}
 $("set-kill-on").addEventListener("click",()=>killSwitch(true));
 $("set-kill-off").addEventListener("click",()=>killSwitch(false));
 $("set-alloc-btn").addEventListener("click",openAlloc);
 $("cfg-save").addEventListener("click",saveConfig);
+$("cfg-reset").addEventListener("click",resetBot);
 wireTelegram();
 $("lrn-missed-btn").addEventListener("click",reportMissed);
 $("lrn-missed").addEventListener("keydown",(e)=>{if(e.key==="Enter")reportMissed();});
