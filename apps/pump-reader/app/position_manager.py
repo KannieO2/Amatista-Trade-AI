@@ -19,9 +19,13 @@ import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-TP1_PCT = float(os.getenv("PUMP_TP1_PCT", "30"))          # phase-1 take-profit trigger
+# TP1 15 (was 30): the bot enters mid-move, so the residual upside is usually
+# modest — a +30% first target rarely triggered, leaving winners to be scratched
+# at break-even. Banking 60% at +15% turns moderate pumps into real wins (the
+# Monte Carlo lifted expectancy ~+0.7%/trade). TRAIL 10 (was 12) tightens give-back.
+TP1_PCT = float(os.getenv("PUMP_TP1_PCT", "15"))          # phase-1 take-profit trigger
 TP1_FRAC = float(os.getenv("PUMP_TP1_FRAC", "0.6"))        # fraction sold in phase 1
-TRAIL_PCT = float(os.getenv("PUMP_TRAIL_PCT", "12"))       # phase-2 trailing stop off peak
+TRAIL_PCT = float(os.getenv("PUMP_TRAIL_PCT", "10"))       # phase-2 trailing stop off peak
 HARD_STOP_PCT = float(os.getenv("PUMP_STOP_LOSS_PCT", "8"))  # hard stop loss
 DUMP_TICK_PCT = float(os.getenv("PUMP_DUMP_TICK_PCT", "10"))  # abrupt one-tick drop = dump
 
@@ -88,25 +92,28 @@ class PositionManager:
         return pos is not None and not pos.closed
 
     def open(self, *, symbol: str, exchange: str, entry_price: float, qty: float,
-             pump_score: int = 0, classification: str = "n/a") -> None:
+             pump_score: int = 0, classification: str = "n/a",
+             now: datetime | None = None) -> None:
         if entry_price <= 0 or qty <= 0:
             return
-        now = datetime.now(UTC)
+        now = now or datetime.now(UTC)
         self.positions[self.key(exchange, symbol)] = ManagedPosition(
             symbol=symbol, exchange=exchange, entry_price=entry_price, qty=qty,
             initial_qty=qty, entry_at=now, peak_price=entry_price, peak_at=now,
             last_price=entry_price, pump_score=pump_score, classification=classification,
         )
 
-    def step(self, key: str, price: float, volume: float | None = None) -> list[ExitEvent]:
+    def step(self, key: str, price: float, volume: float | None = None,
+             now: datetime | None = None) -> list[ExitEvent]:
         pos = self.positions.get(key)
         if not pos or pos.closed or price <= 0:
             return []
+        now = now or datetime.now(UTC)
         prev = pos.last_price or pos.entry_price
         pos.last_price = price
         if price > pos.peak_price:
             pos.peak_price = price
-            pos.peak_at = datetime.now(UTC)
+            pos.peak_at = now
         if volume is not None and volume > 0:
             pos.last_volume = volume
             if volume > pos.peak_volume:
@@ -115,7 +122,7 @@ class PositionManager:
         gain = (price - pos.entry_price) / pos.entry_price * 100
         drop_from_peak = (pos.peak_price - price) / pos.peak_price * 100 if pos.peak_price > 0 else 0
         tick_drop = (prev - price) / prev * 100 if prev > 0 else 0
-        elapsed_min = (datetime.now(UTC) - pos.entry_at).total_seconds() / 60
+        elapsed_min = (now - pos.entry_at).total_seconds() / 60
 
         events: list[ExitEvent] = []
         # Hard stop first (capital protection priority).

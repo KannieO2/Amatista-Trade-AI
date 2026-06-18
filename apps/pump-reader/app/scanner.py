@@ -56,7 +56,11 @@ WAITING_CONFIRMATION_THRESHOLD = 75
 # all close -0.5% on timeout" symptom = entering low-liquidity zones). Require a
 # tighter spread and a deeper book before any auto-entry.
 FORENSIC_MAX_SPREAD_PCT = float(os.getenv("PUMP_FORENSIC_MAX_SPREAD_PCT", "1.0"))
-FORENSIC_MIN_LIQUIDITY_USD = float(os.getenv("PUMP_FORENSIC_MIN_LIQUIDITY_USD", "50000"))
+# Liquidity floor 120k (was 50k): the Monte Carlo showed the entire negative
+# expectancy is the rug / gap-down fat tail, and rugs are thin-book events — a
+# deeper book is the single biggest protection. Higher floor = far fewer trades
+# but materially better EV. Tune down for more (riskier) entries.
+FORENSIC_MIN_LIQUIDITY_USD = float(os.getenv("PUMP_FORENSIC_MIN_LIQUIDITY_USD", "120000"))
 FORENSIC_MAX_TOP_SHARE = float(os.getenv("PUMP_FORENSIC_MAX_TOP_SHARE", "0.80"))
 
 
