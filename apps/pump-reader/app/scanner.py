@@ -341,10 +341,19 @@ async def _deep_scan_symbol(
     closes = [row[4] for row in ohlcv[:-1] if row and row[4] is not None]
     spark = [round(c, 8) for c in closes[-12:]]
 
+    # Prefer the live WebSocket price (sub-second) over the REST ticker; falls
+    # back to the ticker whenever the WS cache has nothing for this symbol.
+    try:
+        from .websocket_manager import get_manager
+        ws_price = get_manager().get_price(exchange_id, symbol)
+    except Exception:
+        ws_price = None
+    last_price = ws_price if (ws_price and ws_price > 0) else float(ticker.get("last") or 0.0)
+
     return ScannedCandidate(
         symbol=symbol,
         exchange=exchange_id,
-        last_price=float(ticker.get("last") or 0.0),
+        last_price=last_price,
         quote_volume_24h=float(ticker.get("quoteVolume") or 0.0),
         price_change_pct_24h=round(price_change, 2),
         volume_spike=round(spike, 2),

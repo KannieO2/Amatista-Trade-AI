@@ -28,6 +28,11 @@ TP1_FRAC = float(os.getenv("PUMP_TP1_FRAC", "0.6"))        # fraction sold in ph
 TRAIL_PCT = float(os.getenv("PUMP_TRAIL_PCT", "10"))       # phase-2 trailing stop off peak
 HARD_STOP_PCT = float(os.getenv("PUMP_STOP_LOSS_PCT", "8"))  # hard stop loss
 DUMP_TICK_PCT = float(os.getenv("PUMP_DUMP_TICK_PCT", "10"))  # abrupt one-tick drop = dump
+# Dynamic stop loss: a trailing stop that rides the PEAK for the WHOLE position
+# (replaces the old 60/40 phase-1/phase-2 split). Once the trade is in profit the
+# stop ratchets up to peak*(1 - DYNAMIC_STOP_PCT/100) and only moves up. Sells
+# 100% if price falls back to it — banks the run before the pump round-trips.
+DYNAMIC_STOP_PCT = float(os.getenv("PUMP_DYNAMIC_STOP_PCT", "5.0"))
 
 # Dynamic risk management.
 TIMEOUT_MINUTES = float(os.getenv("PUMP_TIMEOUT_MINUTES", "8"))    # earliest a faded flat move is cut
@@ -68,13 +73,11 @@ def exit_profile(cluster: str) -> dict:
     """Lee variables de entorno en tiempo real para TP/SL/Timeout (así el
     auto-optimizer de 24h puede ajustarlas mutando os.environ sin reiniciar)."""
     base = {
-        "tp1_pct": float(os.getenv("PUMP_TAKE_PROFIT_PCT", "35")),
-        "tp1_frac": float(os.getenv("PUMP_TP1_FRAC", "0.6")),
-        "trail_pct": float(os.getenv("PUMP_TRAIL_PCT", "5")),
+        "dynamic_stop_pct": float(os.getenv("PUMP_DYNAMIC_STOP_PCT", "5.0")),
         "hard_stop_pct": float(os.getenv("PUMP_STOP_LOSS_PCT", "2.5")),
         "dump_tick_pct": float(os.getenv("PUMP_DUMP_TICK_PCT", "8")),
-        "timeout_min": float(os.getenv("PUMP_TIMEOUT_MINUTES", "15")),
-        "max_hold_min": float(os.getenv("PUMP_MAX_HOLD_MINUTES", "60")),
+        "timeout_min": float(os.getenv("PUMP_TIMEOUT_MINUTES", "60")),
+        "max_hold_min": float(os.getenv("PUMP_MAX_HOLD_MINUTES", "90")),
     }
     return {**base}
 
@@ -98,6 +101,7 @@ class ManagedPosition:
     cluster: str = "n/a"          # long_pump | classic | accumulation → exit profile
     be_armed: bool = False        # break-even stop activated (gain crossed BREAKEVEN_PCT)
     be_stop: float = 0.0          # break-even stop price (entry + margin)
+    dynamic_stop: float = 0.0     # trailing stop off the peak (full position, ratchets up only)
     peak_volume: float = 0.0      # max 1m volume seen during the trade (fuel gauge)
     last_volume: float = 0.0      # latest 1m volume (vs peak → alive / faded)
 
@@ -170,7 +174,7 @@ class PositionManager:
         if gain <= -p["hard_stop_pct"]:
             events.append(self._sell(pos, price, 1.0, "hard_stop"))
             return events
-        # Dump detector: abrupt one-tick collapse -> panic sell the rest.
+        # Dump detector: abrupt one-tick collapse -> panic sell.
         if tick_drop >= p["dump_tick_pct"]:
             events.append(self._sell(pos, price, 1.0, "dump"))
             return events
@@ -182,19 +186,24 @@ class PositionManager:
         if pos.be_armed and price <= pos.be_stop:
             events.append(self._sell(pos, price, 1.0, "break_even"))
             return events
-        # Dynamic time-stop. A flat move (|gain| <= band) is NOT cut just for being
-        # slow — only when its FUEL is gone. While 1m volume stays alive (>= frac of
-        # peak), a sideways pump keeps running; once volume fades, free the capital.
+        # DYNAMIC STOP LOSS (trailing off the peak, FULL position). Replaces the
+        # old 60/40 split: no partial take-profit. While in profit the stop ratchets
+        # up to peak*(1 - DYNAMIC_STOP_PCT/100) and never moves down; a fall back to
+        # it banks the whole run at once.
+        if price > pos.entry_price:
+            new_stop = pos.peak_price * (1 - p["dynamic_stop_pct"] / 100)
+            if new_stop > pos.dynamic_stop:
+                pos.dynamic_stop = new_stop
+        if pos.dynamic_stop > 0 and price <= pos.dynamic_stop:
+            events.append(self._sell(pos, price, 1.0, "trailing"))
+            return events
+        # Volume-aware time-stop (backup). A flat move (|gain| <= band) is NOT cut
+        # just for being slow — only when its FUEL is gone. While 1m volume stays
+        # alive (>= frac of peak) a sideways pump keeps running; once it fades, free
+        # the capital.
         if self._time_stop_fires(pos, gain, elapsed_min, p):
             events.append(self._sell(pos, price, 1.0, "timeout"))
             return events
-        # Phase 1: secure capital with a partial take-profit.
-        if pos.phase == 1 and gain >= p["tp1_pct"]:
-            events.append(self._sell(pos, price, p["tp1_frac"], "tp1"))
-            pos.phase = 2
-        # Phase 2: trailing stop on the remainder.
-        if pos.phase == 2 and not pos.closed and drop_from_peak >= p["trail_pct"]:
-            events.append(self._sell(pos, price, 1.0, "trailing"))
         return events
 
     def _time_stop_fires(self, pos: ManagedPosition, gain: float, elapsed_min: float,

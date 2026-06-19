@@ -18,7 +18,7 @@ DASHBOARD_HTML = r"""<!doctype html>
   :root{
     --bg:#080b11; --panel:#0c1018; --panel-2:#0f141d; --inset:#131a25;
     --border:#1b2333; --border-soft:#151c28; --text:#e7ebf2; --muted:#6f7a8e;
-    --muted-2:#9aa5b8; --pink:#ff2f6e; --pink-soft:#f4789a; --green:#2fd08a;
+    --muted-2:#9aa5b8; --pink:#a05cf2; --pink-soft:#c79cf5; --green:#2fd08a;
     --purple:#8b86f2; --amber:#e6a23c; --red:#e8556a; --blue:#3d7bff;
   }
   /* light mode: override surfaces/text, keep the accent palette */
@@ -29,13 +29,13 @@ DASHBOARD_HTML = r"""<!doctype html>
   }
   html[data-theme="light"] body{
     background:
-      radial-gradient(1000px 540px at 10% -8%, rgba(255,47,110,.08), transparent 58%),
+      radial-gradient(1000px 540px at 10% -8%, rgba(160,92,242,.08), transparent 58%),
       radial-gradient(900px 620px at 102% -4%, rgba(61,123,255,.07), transparent 55%),
       radial-gradient(700px 700px at 85% 110%, rgba(139,134,242,.06), transparent 60%),
       var(--bg);
   }
   html[data-theme="light"] .sidebar{background:rgba(255,255,255,.7);border-right:1px solid var(--border)}
-  html[data-theme="light"] .nav a.active{background:linear-gradient(90deg,rgba(255,47,110,.10),rgba(255,47,110,.02));color:#1a1f2b}
+  html[data-theme="light"] .nav a.active{background:linear-gradient(90deg,rgba(160,92,242,.10),rgba(160,92,242,.02));color:#1a1f2b}
   html[data-theme="light"] .card,html[data-theme="light"] .panel,html[data-theme="light"] .modal,
   html[data-theme="light"] .topbar,html[data-theme="light"] .pill{background:rgba(255,255,255,.75);border-color:var(--border)}
   *{box-sizing:border-box}
@@ -45,9 +45,10 @@ DASHBOARD_HTML = r"""<!doctype html>
   html,body{margin:0;height:100%}
   body{
     background:
-      radial-gradient(1000px 540px at 10% -8%, rgba(255,47,110,.12), transparent 58%),
-      radial-gradient(900px 620px at 102% -4%, rgba(61,123,255,.11), transparent 55%),
-      radial-gradient(700px 700px at 85% 110%, rgba(139,134,242,.10), transparent 60%),
+      radial-gradient(1050px 560px at 8% -10%, rgba(160,92,242,.20), transparent 56%),
+      radial-gradient(950px 640px at 104% -6%, rgba(61,123,255,.17), transparent 54%),
+      radial-gradient(820px 760px at 88% 112%, rgba(47,208,138,.13), transparent 58%),
+      radial-gradient(700px 700px at 50% 50%, rgba(139,134,242,.07), transparent 70%),
       var(--bg);
     background-attachment:fixed;
     color:var(--text);
@@ -66,6 +67,19 @@ DASHBOARD_HTML = r"""<!doctype html>
   .eqline{position:absolute;top:0;width:1px;background:var(--green);opacity:0;pointer-events:none;transition:opacity .1s}
   .eqdot{position:absolute;width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px rgba(47,208,138,.25);transform:translate(-50%,-50%);opacity:0;pointer-events:none}
   .eqtip{position:absolute;pointer-events:none;opacity:0;transform:translate(-50%,-130%);background:var(--inset);border:1px solid var(--border);border-radius:8px;padding:6px 9px;font-size:11px;white-space:nowrap;z-index:5;box-shadow:0 8px 24px -8px rgba(0,0,0,.5)}
+  .eqhead{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:10px}
+  .eqnow{font-family:"Geist Mono",monospace;font-size:22px;font-weight:600;line-height:1}
+  .eqsub{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-top:3px}
+  .eqdelta{font-family:"Geist Mono",monospace;font-size:13px;font-weight:600}
+  .eqyax{position:absolute;right:4px;font-family:"Geist Mono",monospace;font-size:10px;color:var(--muted);pointer-events:none;background:var(--panel);padding:0 3px;border-radius:4px}
+  .eqmax{top:2px}.eqmin{bottom:2px}
+  .funnel{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px}
+  .fstep{position:relative;padding:13px 15px;border:1px solid var(--border-soft);border-radius:11px;background:var(--panel-2);overflow:hidden;transition:transform .2s cubic-bezier(.16,1,.3,1)}
+  .fstep:hover{transform:translateY(-2px)}
+  .fstep::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--fc,var(--muted))}
+  .fstep .fn{font-family:"Geist Mono",monospace;font-size:26px;font-weight:600;line-height:1;color:var(--fc,var(--text))}
+  .fstep .fl{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-top:6px}
+  .fstep .fx{position:absolute;right:12px;top:14px;font-family:"Geist Mono",monospace;font-size:11px;color:var(--muted)}
   .eqtip .d{color:var(--muted);font-size:10px;margin-bottom:2px}
   .eqtip .v{font-weight:600}
   .eqtip .dl{font-family:"Geist Mono",monospace}
@@ -85,14 +99,15 @@ DASHBOARD_HTML = r"""<!doctype html>
   /* sidebar */
   .sidebar{background:rgba(12,16,24,.6);border-right:1px solid rgba(255,255,255,.06);padding:18px 14px;display:flex;flex-direction:column;gap:6px}
   .brand{display:flex;align-items:center;gap:9px;padding:4px 8px 16px}
-  .brand .dot{width:22px;height:22px;border-radius:7px;background:radial-gradient(circle at 30% 30%,#ff5c8a,#ff2f6e 60%,#b3134a);box-shadow:0 0 0 1px rgba(255,47,110,.35),0 4px 14px -4px rgba(255,47,110,.5)}
+  .brand .dot{width:22px;height:22px;border-radius:7px;background:radial-gradient(circle at 30% 30%,#d9b8ff,#a05cf2 55%,#6a2bb0);box-shadow:0 0 0 1px rgba(160,92,242,.35),0 4px 14px -4px rgba(160,92,242,.5)}
+  .brand svg.gem{width:26px;height:26px;flex:0 0 auto;filter:drop-shadow(0 4px 11px rgba(160,92,242,.6));animation:floaty 4s ease-in-out infinite}
   .brand b{font-weight:600;letter-spacing:-.02em}
   .brand span{color:var(--muted)}
   .navlabel{font-size:10px;letter-spacing:.14em;color:#4d5666;text-transform:uppercase;padding:14px 8px 6px}
   .nav a{display:flex;align-items:center;gap:10px;padding:8px 9px;border-radius:8px;color:var(--muted-2);text-decoration:none;cursor:pointer;font-weight:500;transition:background .15s ease,color .15s ease}
   .nav a svg{width:15px;height:15px;opacity:.8;flex:none}
   .nav a:hover{background:var(--panel-2);color:var(--text)}
-  .nav a.active{background:linear-gradient(90deg,rgba(255,47,110,.14),rgba(255,47,110,.02));color:#fff}
+  .nav a.active{background:linear-gradient(90deg,rgba(160,92,242,.14),rgba(160,92,242,.02));color:#fff}
   .nav a.active svg{opacity:1;color:var(--pink)}
   .nav a .badge{margin-left:auto;font-size:9px;background:var(--inset);color:var(--muted);padding:1px 6px;border-radius:5px}
   .badge{display:inline-block;font-size:11px;padding:3px 8px;border-radius:6px;background:var(--inset);color:var(--muted-2);font-weight:600}
@@ -196,6 +211,11 @@ DASHBOARD_HTML = r"""<!doctype html>
   table{width:100%;border-collapse:collapse}
   thead th{text-align:left;font-size:9.5px;letter-spacing:.1em;color:var(--muted);text-transform:uppercase;font-weight:500;padding:0 8px 9px}
   tbody td{padding:8px;border-top:1px solid var(--border-soft);font-size:12px;vertical-align:middle}
+  /* fitbl: fixed layout so columns honour their % widths and the table never
+     overflows its panel (no horizontal scroll). Overrides the global
+     min-width:max-content. Long cell text is clipped with an ellipsis. */
+  table.fitbl{min-width:0;width:100%;table-layout:fixed}
+  .fitbl th,.fitbl td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-left:6px;padding-right:6px}
   .scoreb{display:inline-block;min-width:42px;text-align:center;padding:3px 6px;border-radius:6px;font-weight:600;font-size:11px}
   .tag{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--muted-2)}
   .bar{display:flex;align-items:center;gap:8px}
@@ -269,6 +289,40 @@ DASHBOARD_HTML = r"""<!doctype html>
   .btn.primary{background:var(--pink);border-color:var(--pink);color:#fff}
   .btn.primary:disabled{opacity:.4;cursor:not-allowed}
   .empty{color:var(--muted);text-align:center;padding:26px;font-size:12px}
+
+  /* ============ Visual polish: liquid glass + color + motion ============ */
+  @keyframes riseIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+  @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+  .grid-3{display:grid;grid-template-columns:1fr 1.5fr 1fr;gap:14px}
+  @media(max-width:1200px){.grid-3{grid-template-columns:1fr 1fr}}
+  @media(max-width:860px){.grid-3{grid-template-columns:1fr}}
+  /* brighter, glassier surfaces (iOS liquid-glass) */
+  .panel,.card{
+    background:linear-gradient(180deg,rgba(32,42,60,.60),rgba(13,18,28,.52));
+    border:1px solid rgba(255,255,255,.09);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 22px 54px -30px rgba(0,0,0,.85),0 0 0 1px rgba(255,255,255,.015);
+    backdrop-filter:blur(22px) saturate(160%);-webkit-backdrop-filter:blur(22px) saturate(160%);
+    position:relative;
+    transition:transform .26s cubic-bezier(.16,1,.3,1),box-shadow .26s ease,border-color .26s ease;
+  }
+  .panel:hover,.card:hover{transform:translateY(-3px);border-color:rgba(160,92,242,.28);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.15),0 32px 64px -28px rgba(0,0,0,.92),0 0 36px -10px rgba(160,92,242,.22)}
+  /* top edge sheen */
+  .panel::after,.card::after{content:"";position:absolute;top:0;left:14px;right:14px;height:1px;
+    background:linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent);pointer-events:none}
+  /* staggered entrance for the whole view */
+  .view>*{animation:riseIn .55s cubic-bezier(.16,1,.3,1) both}
+  .view>*:nth-child(2){animation-delay:.05s}.view>*:nth-child(3){animation-delay:.1s}
+  .view>*:nth-child(4){animation-delay:.16s}.view>*:nth-child(5){animation-delay:.22s}
+  /* glowing score badges + brighter KPI numbers */
+  .scoreb{box-shadow:inset 0 0 0 1px rgba(255,255,255,.07),0 0 18px -7px currentColor}
+  .card .kval{text-shadow:0 0 30px rgba(160,92,242,.16)}
+  .pill.live .ldot{animation:pulse 1.6s infinite,floaty 3s ease-in-out infinite}
+  /* row hover feedback */
+  tbody tr{transition:background .15s ease}
+  tbody tr:hover{background:rgba(255,255,255,.04)}
+  /* auto-capitalize panel sublabels so nothing starts lowercase */
+  .phead .px{text-transform:capitalize}
   /* top-level mode switch (Pump <-> Grid) */
   .modeswitch{display:inline-flex;background:rgba(12,16,24,.7);border:1px solid var(--border);border-radius:11px;padding:3px;gap:3px}
   .modeswitch button{display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;color:var(--muted);font-family:inherit;font-size:12px;font-weight:600;padding:7px 14px;border-radius:8px;cursor:pointer;transition:all .14s ease}
@@ -288,7 +342,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 <body>
 <div class="app">
   <aside class="sidebar">
-    <div class="brand"><div class="dot"></div><div><b>Amatista</b> <span>TradeOS</span></div></div>
+    <div class="brand"><svg class="gem" viewBox="0 0 24 24"><defs><linearGradient id="amg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e7cdff"/><stop offset="55%" stop-color="#a05cf2"/><stop offset="100%" stop-color="#6a2bb0"/></linearGradient></defs><path d="M6 3.2h12l3.4 5.4L12 21.4 2.6 8.6z" fill="url(#amg)" stroke="rgba(255,255,255,.4)" stroke-width=".6" stroke-linejoin="round"/><path d="M6 3.2l6 5.4 6-5.4M2.6 8.6h18.8M12 8.6v12.8" fill="none" stroke="rgba(255,255,255,.5)" stroke-width=".7"/></svg><div><b>Amatista</b> <span>TradeOS</span></div></div>
     <div class="navlabel">Pump Reader</div>
     <nav class="nav">
       <a class="active" data-view="pump"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>Overview</a>
@@ -382,17 +436,24 @@ DASHBOARD_HTML = r"""<!doctype html>
         </div>
       </div>
 
-      <div class="grid-2b">
+      <div class="grid-3">
         <div class="panel">
-          <div class="phead"><span class="pt">Candidatos pre-estallido</span><span class="px">FSM · antes del pump</span></div>
-          <table>
-            <thead><tr><th>Token</th><th>Estado</th><th>Acc</th><th>Pers</th><th>Rug</th><th>Conf</th></tr></thead>
-            <tbody id="tbl-body"><tr><td colspan="6" class="empty">Analizando acumulación…</td></tr></tbody>
+          <div class="phead"><span class="pt">Candidatos pre-estallido</span><span class="px" id="pp-count">FSM · antes del pump</span></div>
+          <table class="fitbl">
+            <thead><tr><th style="width:40%">Token</th><th style="width:28%">Estado</th><th style="width:11%">Acc</th><th style="width:11%">Pers</th><th style="width:10%">Rug</th></tr></thead>
+            <tbody id="pp-body"><tr><td colspan="5" class="empty">Analizando acumulación…</td></tr></tbody>
           </table>
         </div>
         <div class="panel">
-          <div class="phead"><span class="pt">Latest alerts</span><span class="px">stream</span></div>
-          <div id="alerts-body"><div class="empty">No alerts yet</div></div>
+          <div class="phead"><span class="pt">Mercado · Live</span><span class="px">Gainers / Momentum</span></div>
+          <table class="fitbl">
+            <thead><tr><th style="width:16%">Score</th><th style="width:42%">Token</th><th style="width:22%">Cluster</th><th style="width:20%">&Delta;24h</th></tr></thead>
+            <tbody id="tbl-body"><tr><td colspan="4" class="empty">Escaneando…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="panel">
+          <div class="phead"><span class="pt">Alertas · Próximas a subir</span><span class="px">Donde el bot invierte</span></div>
+          <div id="alerts-body"><div class="empty">Sin alertas todavía</div></div>
         </div>
       </div>
     </section>
@@ -479,22 +540,25 @@ DASHBOARD_HTML = r"""<!doctype html>
 
     <!-- ============ FASE 2 / PIPELINE VIEW ============ -->
     <section class="view hidden" id="view-pipeline">
-      <div class="vhead"><div><h1>Fase 2 · Máquina de estados</h1><p>Candidate &rarr; Watchlist &rarr; Monitor &rarr; Confirmation &rarr; Entry · detección de PREPARACIÓN</p></div><div class="ts mono" id="pl-ts">—</div></div>
-      <div class="grid-2b">
-        <div class="panel">
-          <div class="phead"><span class="pt">Estado del pipeline</span><span class="px" id="pl-mode">—</span></div>
-          <div id="pl-status"><div class="empty">cargando…</div></div>
-        </div>
-        <div class="panel">
-          <div class="phead"><span class="pt">Decisiones recientes (Decision Log)</span><span class="px" id="pl-dec-count">0</span></div>
-          <table><thead><tr><th>Hora</th><th>Token</th><th>De&rarr;A</th><th>Acción</th><th>Acc</th><th>Pers</th><th>Rug</th></tr></thead>
-          <tbody id="pl-decisions"><tr><td colspan="7" class="empty">Sin decisiones todavía</td></tr></tbody></table>
-        </div>
+      <div class="vhead"><div><h1>Máquina de estados · Fase 2</h1><p>Embudo de detección: cada token avanza En cola &rarr; Analizando &rarr; Confirmando &rarr; Comprado. Solo entra el que SOSTIENE la acumulación.</p></div><div class="ts mono" id="pl-ts">—</div></div>
+
+      <div class="funnel" id="pl-funnel"></div>
+
+      <div class="panel" style="margin-bottom:14px">
+        <div class="phead"><span class="pt">Configuración del motor</span><span class="px" id="pl-mode">—</span></div>
+        <div id="pl-status"><div class="empty">cargando…</div></div>
       </div>
-      <div class="panel">
-        <div class="phead"><span class="pt">Tablero de símbolos en la FSM</span><span class="px" id="pl-board-count">0</span></div>
-        <table><thead><tr><th>Token</th><th>Exch</th><th>Estado</th><th>Accumulation</th><th>Persistence</th><th>RugRisk</th><th>Seq</th><th>Confirm</th></tr></thead>
+
+      <div class="panel" style="margin-bottom:14px">
+        <div class="phead"><span class="pt">Tablero de símbolos en análisis</span><span class="px" id="pl-board-count">0</span></div>
+        <table><thead><tr><th>Token</th><th>Exch</th><th>Estado</th><th>Accum</th><th>Persist</th><th>RugRisk</th><th>Seq</th><th>Confirm</th></tr></thead>
         <tbody id="pl-board"><tr><td colspan="8" class="empty">Ningún símbolo observado aún · alimenta el scan</td></tr></tbody></table>
+      </div>
+
+      <div class="panel">
+        <div class="phead"><span class="pt">Decision Log · auditoría</span><span class="px" id="pl-dec-count">0</span></div>
+        <table><thead><tr><th>Hora</th><th>Token</th><th>De&rarr;A</th><th>Acción</th><th>Acc</th><th>Pers</th><th>Rug</th></tr></thead>
+        <tbody id="pl-decisions"><tr><td colspan="7" class="empty">Sin decisiones todavía</td></tr></tbody></table>
       </div>
     </section>
 
@@ -729,21 +793,30 @@ function equitySvg(curve){
   let line=vals.map((v,i)=>`${i?'L':'M'}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" ");
   if(n<2){const yy=y(vals[0]).toFixed(1);line=`M${pad} ${yy} L${w-pad} ${yy}`;}
   const area=`${line} L${w-pad} ${h-pad} L${pad} ${h-pad} Z`;
-  const up=vals[vals.length-1]>=vals[0];
+  const start=vals[0], cur=vals[n-1], dAbs=cur-start, dPct=start?(dAbs/start*100):0;
+  const up=cur>=start;
   const col=up?"var(--green)":"var(--red)";
-  return `<div class="eqwrap" id="eqwrap" style="height:${h}px">
+  const dCol=dAbs>=0?"var(--green)":"var(--red)";
+  const baseY=y(start).toFixed(1);
+  return `<div class="eqhead">
+      <div><div class="eqnow mono">$${cur.toFixed(2)}</div><div class="eqsub">equity actual</div></div>
+      <div class="eqdelta" style="color:${dCol}">${dAbs>=0?'+':''}$${Math.abs(dAbs).toFixed(2)} · ${dAbs>=0?'+':''}${dPct.toFixed(2)}%</div>
+    </div>
+    <div class="eqwrap" id="eqwrap" style="height:${h}px">
     <svg width="100%" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
       <defs><linearGradient id="eg" x1="0" x2="0" y1="0" y2="1">
         <stop offset="0" stop-color="rgba(47,208,138,.28)"/><stop offset="1" stop-color="rgba(47,208,138,0)"/>
       </linearGradient></defs>
+      <line x1="${pad}" y1="${baseY}" x2="${w-pad}" y2="${baseY}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="4 5" opacity=".35"/>
       <path d="${area}" fill="url(#eg)"/>
       <path d="${line}" fill="none" stroke="${col}" stroke-width="1.8"/>
     </svg>
+    <div class="eqyax eqmax">${fmtK(max)}</div>
+    <div class="eqyax eqmin">${fmtK(min)}</div>
     <div class="eqline" id="eqline" style="height:${h}px"></div>
     <div class="eqdot" id="eqdot"></div>
     <div class="eqtip" id="eqtip"></div>
-  </div>
-  <div class="px mono" style="margin-top:6px">${fmtK(max)}</div>`;
+  </div>`;
 }
 // Hover tooltip: shows the $value at the cursor + the gain/loss vs start and vs
 // the previous point, so you see exactly where the money moved.
@@ -786,13 +859,13 @@ async function loadOverview(){
   $("pump-sub").textContent = `Real-time pump & squeeze surveillance · ${d.monitored} tokens monitored`;
   $("pump-ts").textContent = new Date(d.now).toLocaleString();
   $("k-monitored").textContent = d.monitored;
-  $("k-exchanges").textContent = "across " + (d.exchanges||[]).join(" · ");
+  $("k-exchanges").textContent = "Across " + (d.exchanges||[]).map(e=>e.toUpperCase()).join(" · ");
   if(d.score_max){ $("k-scoremax").textContent = d.score_max.value.toFixed(2);
     $("k-scoremax-sub").textContent = `${d.score_max.symbol} · ${tcase(d.score_max.cluster)}`; }
   $("k-alerts").textContent = d.alerts_24h.total;
   $("k-alerts-sub").textContent = `${d.alerts_24h.classic} classic · ${d.alerts_24h.long_pump} long_pump`;
   $("k-positions").textContent = d.open_positions;
-  $("k-positions-sub").textContent = (d.open_positions===0?"no positions open · ":"") + "executor armed (" + d.exec_mode + ")";
+  $("k-positions-sub").textContent = (d.open_positions===0?"Sin posiciones · ":"") + "Executor armado (" + d.exec_mode + ")";
   $("tb-balance").textContent = fmtK(d.balance);
   const pnlEl=$("tb-pnl"); pnlEl.textContent=(d.pnl_7d>=0?"+":"-")+"$"+Math.abs(d.pnl_7d).toFixed(2);
   pnlEl.style.color=d.pnl_7d>0?"var(--green)":d.pnl_7d<0?"var(--red)":"";
@@ -808,26 +881,39 @@ async function loadOverview(){
   $("equity-chart").innerHTML = equitySvg(d.equity_curve);
   wireEquityHover(d.equity_curve);
 
+  // Pre-pump (FSM) section: the EARLY candidates the bot actually buys.
   const PP_STATE={entry:"var(--green)",confirmation:"var(--pink)",monitor:"var(--amber)",watchlist:"var(--muted)"};
-  const PP_LBL={entry:"ENTRY · comprado",confirmation:"confirmando",monitor:"analizando",watchlist:"en cola"};
-  $("tbl-body").innerHTML = (d.prepump||[]).length ? d.prepump.map(r=>{
+  const PP_LBL={entry:"Comprado",confirmation:"Confirmando",monitor:"Analizando",watchlist:"En cola"};
+  const pp=(d.prepump||[]);
+  $("pp-body").innerHTML = pp.length ? pp.map(r=>{
     const col=PP_STATE[r.state]||"var(--muted)";
     return `<tr style="cursor:pointer" onclick="openCandidate('${r.symbol}','${r.exchange}')">
       <td><span class="sym">${r.symbol}</span> <span class="px">${upx(r.exchange)}</span></td>
-      <td><span class="px" style="color:${col};font-weight:600">${PP_LBL[r.state]||r.state}</span></td>`
-      +plScoreCell(r.acc,false)+plScoreCell(r.pers,false)+plScoreCell(r.rug,true)
-      +`<td class="mono">${r.confirm_count||0}</td>
+      <td><span class="px" style="color:${col};font-weight:600">${(PP_LBL[r.state]||r.state).toUpperCase()}</span></td>`
+      +plScoreCell(r.acc,false)+plScoreCell(r.pers,false)+plScoreCell(r.rug,true)+`</tr>`;
+  }).join("") : `<tr><td colspan="5" class="empty">Analizando acumulación… alimentando el detector</td></tr>`;
+  const ppHot=pp.filter(r=>r.state==='entry'||r.state==='confirmation').length;
+  $("pp-count").textContent = pp.length ? `${ppHot} en compra/confirmación · ${pp.length} en análisis` : "FSM · antes del pump";
+
+  $("tbl-body").innerHTML = (d.table||[]).length ? d.table.map(r=>{
+    const sc = r.score>=70?"var(--pink)":r.score>=40?"var(--amber)":"var(--muted)";
+    const scBg = r.score>=70?"rgba(160,92,242,.14)":r.score>=40?"rgba(230,162,60,.14)":"rgba(255,255,255,.05)";
+    const up = r.delta_24h>=0;
+    return `<tr style="cursor:pointer" onclick="openCandidate('${r.symbol}','${r.exchange}')">
+      <td><span class="scoreb mono" style="color:${sc};background:${scBg}">${r.score}</span></td>
+      <td><span class="sym">${r.symbol}</span> <span class="px">${upx(r.exchange)}</span></td>
+      <td><span class="tag"><span class="cdot" style="background:${clusterColor(r.cluster)}"></span>${tcase(r.cluster)}</span></td>
+      <td class="mono delta ${up?'up':'down'}">${up?'+':''}${r.delta_24h}%</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="6" class="empty">Sin candidatos en análisis · alimentando el detector…</td></tr>`;
+  }).join("") : `<tr><td colspan="4" class="empty">No candidates yet · run Update</td></tr>`;
 
   $("alerts-body").innerHTML = (d.latest_alerts||[]).length ? d.latest_alerts.map(a=>{
     return `<div class="alert" style="cursor:pointer" onclick="openCandidate('${a.symbol}','')">
-      <span class="scoreb mono" style="color:var(--pink);background:rgba(255,47,110,.14)">${a.score}</span>
-      <div class="meta"><div class="top"><b>${a.symbol}</b><span class="tag"><span class="cdot" style="background:${clusterColor(a.cluster)}"></span>${tcase(a.cluster)}</span></div>
-      <div class="sub">ScamPump candidate: ${a.symbol}</div></div>
+      <span class="scoreb mono" style="color:var(--pink);background:rgba(160,92,242,.14)">${a.score}</span>
+      <div class="meta"><div class="top"><b>${a.symbol}</b><span class="tag"><span class="cdot" style="background:${clusterColor(a.cluster)}"></span>${tcase(a.cluster)}</span></div></div>
       <span class="ago mono">${a.ago}</span>
     </div>`;
-  }).join("") : `<div class="empty">No alerts yet</div>`;
+  }).join("") : `<div class="empty">Sin alertas todavía</div>`;
 }
 
 // ---- grvt ----
@@ -939,7 +1025,7 @@ $("alloc-save").addEventListener("click", async ()=>{
 // ---- tokens / alerts / learning / trades / settings ----
 function scoreBadge(s){
   const c=s>=70?"var(--pink)":s>=40?"var(--amber)":"var(--muted)";
-  const bg=s>=70?"rgba(255,47,110,.14)":s>=40?"rgba(230,162,60,.14)":"rgba(255,255,255,.05)";
+  const bg=s>=70?"rgba(160,92,242,.14)":s>=40?"rgba(230,162,60,.14)":"rgba(255,255,255,.05)";
   return `<span class="scoreb mono" style="color:${c};background:${bg}">${s}</span>`;
 }
 let TOKENS=[];
@@ -1094,11 +1180,16 @@ async function loadPipeline(){
   if(st.enabled===false){ $("pl-status").innerHTML='<div class="empty">Pipeline no iniciado</div>'; return; }
   const thr=st.thresholds||{}; const stc=st.states||{};
   $("pl-mode").textContent=(st.mode||"—").toUpperCase();
+  // Embudo: flujo del pipeline con conteos por estado (visual, ordenado).
+  const FUNNEL=[["watchlist","En cola","var(--muted)"],["monitor","Analizando","var(--amber)"],
+                ["confirmation","Confirmando","var(--pink)"],["entry","Comprado","var(--green)"]];
+  $("pl-funnel").innerHTML = FUNNEL.map(([k,lbl,c],i)=>
+    `<div class="fstep" style="--fc:${c}"><div class="fx">${i<3?'&rarr;':''}</div><div class="fn">${stc[k]||0}</div><div class="fl">${lbl}</div></div>`
+  ).join("");
   $("pl-status").innerHTML=
-    `<div class="pnlrow"><span>Modo</span><b>${st.mode==='enforcing'?'ENFORCING · gobierna entradas':'SHADOW · solo observa'}</b></div>`
+    `<div class="pnlrow"><span>Modo</span><b>${st.mode==='enforcing'?'ENFORCING · gobierna entradas (compra)':'SHADOW · solo observa'}</b></div>`
    +`<div class="pnlrow"><span>Ventana de scoring</span><b class="mono">${st.window_min} min</b></div>`
-   +`<div class="pnlrow"><span>Umbrales</span><b class="mono">Acc≥${thr.acc_min} · Pers≥${thr.pers_min} · Rug≤${thr.rug_max} · ${thr.confirm_ticks} ticks</b></div>`
-   +`<div class="pnlrow"><span>Por estado</span><b class="mono">`+Object.entries(stc).map(([k,v])=>`${k}:${v}`).join(" · ")+`</b></div>`;
+   +`<div class="pnlrow"><span>Umbrales de entrada</span><b class="mono">Acc≥${thr.acc_min} · Pers≥${thr.pers_min} · Rug≤${thr.rug_max} · ${thr.confirm_ticks} tick(s)</b></div>`;
   const dec=(d.rows||[]); $("pl-dec-count").textContent=dec.length;
   $("pl-decisions").innerHTML=dec.length ? dec.map(r=>
     `<tr><td class="mono px">${new Date(r.ts_ms).toLocaleTimeString()}</td><td class="sym">${r.symbol} <span class="px">${upx(r.exchange)}</span></td>

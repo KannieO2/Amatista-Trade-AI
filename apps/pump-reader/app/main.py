@@ -53,6 +53,7 @@ from .risk import RiskGuard
 from .scanner import ScannedCandidate, _cluster, fetch_token_detail, forensic_check, scan_markets
 from .velocity import VelocityWatcher, watch_list_from_scores
 from .learning import LearningLab
+from .websocket_manager import USE_WEBSOCKETS, get_manager
 from .user_bot import PAPER_BALANCE, UserBot, all_bots, default_allocation, ensure_bots, get_bot
 from .microstructure import MicroObserver, iso as micro_iso
 from .forensics import ForensicsStore
@@ -267,6 +268,8 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_observe_loop()),
         asyncio.create_task(_pipeline_loop()),
         asyncio.create_task(_optimization_loop()),
+        asyncio.create_task(_grid_summary_loop()),
+        asyncio.create_task(_websocket_loop()),
     ]
     asyncio.create_task(notify.send_system(
         f"🟢 <b>Bot iniciado</b> · modo {os.getenv('PUMP_EXEC_MODE', 'paper')} · "
@@ -289,7 +292,104 @@ async def lifespan(app: FastAPI):
             _forensics.close()
         if _pipeline is not None:
             _pipeline.close()
+        if USE_WEBSOCKETS:
+            try:
+                await get_manager().stop()
+            except Exception:
+                pass
         await store.close()
+
+
+# --- Global kill switch auto-trigger (capital protection) -------------------
+# Halts ALL bots when the market/data layer turns unhealthy: repeated scan
+# failures (rate-limit storms, exchange outages) or a sudden collapse in market
+# volume. Auto-set halts carry an "auto:" reason and auto-clear once the market
+# recovers; a kill switch set MANUALLY via the API is never auto-cleared.
+KILL_FAIL_LIMIT = int(os.getenv("PUMP_KILL_FAIL_LIMIT", "3"))
+KILL_VOL_DROP_PCT = float(os.getenv("PUMP_KILL_VOL_DROP_PCT", "60"))
+
+
+class _KillMonitor:
+    def __init__(self) -> None:
+        self.fails = 0
+        self.vol_baseline = 0.0    # EMA of healthy total scan volume
+        self.auto_active = False
+
+    def _halt(self, reason: str) -> None:
+        self.auto_active = True
+        for bot in all_bots():
+            bot.guard.set_kill_switch(True, f"auto: {reason}")
+        logger.warning("KILL SWITCH ON (auto): %s", reason)
+
+    def _resume(self) -> None:
+        self.auto_active = False
+        for bot in all_bots():  # lift only the halts WE set; leave manual ones
+            if bot.guard.kill_switch and bot.guard.kill_reason.startswith("auto:"):
+                bot.guard.set_kill_switch(False, "auto-recover")
+        logger.warning("KILL SWITCH OFF (auto-recover): market healthy")
+
+    async def on_failure(self, exc: Exception) -> None:
+        self.fails += 1
+        if self.auto_active:
+            return
+        msg = repr(exc).lower()
+        rate_limited = any(k in msg for k in ("rate", "429", "too many", "ddos"))
+        if self.fails >= KILL_FAIL_LIMIT or (rate_limited and self.fails >= 2):
+            why = "rate-limit storm" if rate_limited else f"{self.fails} fallos de escaneo seguidos"
+            self._halt(why)
+            await notify.send_system(f"KILL SWITCH (auto): {why}. Trading detenido.")
+
+    async def on_success(self, total_volume: float) -> None:
+        self.fails = 0
+        crash = (self.vol_baseline > 0 and 0 < total_volume
+                 < self.vol_baseline * (1 - KILL_VOL_DROP_PCT / 100))
+        if total_volume > 0:  # slow EMA; decays during a halt so it self-heals
+            alpha = 0.1 if crash else 0.3
+            self.vol_baseline = (total_volume if self.vol_baseline == 0
+                                 else (1 - alpha) * self.vol_baseline + alpha * total_volume)
+        if crash and not self.auto_active:
+            self._halt("caída brusca de volumen de mercado")
+            await notify.send_system("KILL SWITCH (auto): caída brusca de volumen. Trading detenido.")
+        elif self.auto_active and not crash:
+            self._resume()
+            await notify.send_system("Mercado recuperado. KILL SWITCH desactivado (auto). Trading reanudado.")
+
+
+_kill = _KillMonitor()
+
+
+# --- Real-time price feed (WebSockets) --------------------------------------
+# Pushes sub-second prices into the live candidate objects so the exit monitor +
+# dump detector react instantly. FAIL-SAFE: if WS is off or a socket is down,
+# every consumer falls back to REST polling (see scanner.get_price usage).
+WS_RESYNC_SECONDS = int(os.getenv("PUMP_WEBSOCKET_RESYNC_SECONDS", "120"))
+
+
+async def on_websocket_price(exchange: str, symbol: str, price: float) -> None:
+    c = _candidates.get(f"{exchange}:{symbol}")
+    if c is not None and price > 0:
+        c.last_price = price
+
+
+async def _websocket_loop() -> None:
+    """Keep WS subscriptions in sync with the current candidates + open positions
+    (they rotate each scan). Re-subscribes every WS_RESYNC_SECONDS."""
+    if not USE_WEBSOCKETS:
+        return
+    mgr = get_manager()
+    mgr.add_callback(on_websocket_price)
+    while True:
+        try:
+            pairs = {(c.exchange, c.symbol) for c in list(_candidates.values())}
+            for bot in all_bots():
+                for p in list(bot.pm.positions.values()):
+                    if not p.closed:
+                        pairs.add((p.exchange, p.symbol))
+            if pairs:
+                await mgr.resync(list(pairs))
+        except Exception:
+            logger.exception("websocket resync failed")
+        await asyncio.sleep(WS_RESYNC_SECONDS)
 
 
 async def _auto_scan_loop() -> None:
@@ -298,24 +398,58 @@ async def _auto_scan_loop() -> None:
         try:
             await _perform_scan()
             logger.info("auto-scan done: %d candidates", len(_candidates))
+            await _kill.on_success(sum((c.quote_volume_24h or 0.0) for c in _candidates.values()))
         except Exception as exc:
             logger.exception("auto-scan failed")
+            await _kill.on_failure(exc)
             await notify.send_error("Scan loop", repr(exc))
         await asyncio.sleep(SCAN_INTERVAL_SECONDS)
 
 
+_last_grid_fill_at = ""
+GRID_FILL_ALERTS = os.getenv("PUMP_GRID_FILL_ALERTS", "true").lower() == "true"
+
+
 async def _grid_tick_loop() -> None:
-    """When the grid is running, fetch a live price and advance the grid."""
+    """When the grid is running, fetch a live price and advance the grid. Notifies
+    each NEW fill (open/close) in real time with PnL ([GRID] tag)."""
+    global _last_grid_fill_at
     while True:
         try:
             if _grid.running and _grid.grid:
                 price = await fetch_price(_grid.pair)
                 if price > 0:
                     _grid.step(price)
+                    if GRID_FILL_ALERTS:
+                        # Fills nuevos = los que tienen 'at' posterior al último visto
+                        # (robusto al cap de la lista; 'at' ISO ordena cronológico).
+                        new = [f for f in _grid.fills if f.at > _last_grid_fill_at]
+                        for f in new:
+                            await notify.send_telegram(notify.format_grid_fill(
+                                _grid.pair, f.side, f.price, f.qty, f.pnl))
+                        if _grid.fills:
+                            _last_grid_fill_at = _grid.fills[-1].at
         except Exception as exc:
             logger.exception("grid tick failed")
             await notify.send_error("Grid tick", repr(exc))
         await asyncio.sleep(GRID_TICK_SECONDS)
+
+
+GRID_SUMMARY_SECONDS = int(os.getenv("PUMP_GRID_SUMMARY_SECONDS", "3600"))  # 1h
+
+
+async def _grid_summary_loop() -> None:
+    """Resumen periódico del Grid Bot ([GRID]): estado, PnL realizado/no realizado,
+    equity. Silencia el reenvío si el equity no cambió >= umbral ($5)."""
+    while True:
+        await asyncio.sleep(GRID_SUMMARY_SECONDS)
+        try:
+            if _grid.running:
+                s = _grid.stats()
+                if notify.grid_summary_changed(s.get("equity", 0.0) or 0.0):
+                    await notify.send_telegram(notify.format_grid_summary(s))
+        except Exception:
+            logger.exception("grid summary loop failed")
 
 
 async def _daily_discover_loop() -> None:
@@ -1179,9 +1313,18 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
         logger.info("forensic block %s: %s", candidate.symbol, reasons)
         return False
 
+    # Position size by FIXED RISK: risk a fixed % of balance per trade, sized so
+    # that hitting the dynamic stop loses exactly that. size = risk$ / (stop% ).
+    # Floor $10, never exceed balance. Falls back to auto_entry_usd if misconfigured.
+    risk_pct = float(os.getenv("PUMP_RISK_PER_TRADE_PCT", "1.0"))
+    stop_pct = float(os.getenv("PUMP_DYNAMIC_STOP_PCT", "5.0"))
+    balance = bot.balance()
+    size = (balance * risk_pct / 100) / (stop_pct / 100) if (stop_pct > 0 and balance > 0) else bot.auto_entry_usd
+    size = round(max(10.0, min(size, balance or bot.auto_entry_usd)), 2)
+
     result = await bot.engine.act(
         symbol=candidate.symbol, side=Side.buy, reference_price=candidate.last_price,
-        capital_usd=bot.auto_entry_usd, exchanges=[candidate.exchange],
+        capital_usd=size, exchanges=[candidate.exchange],
         open_trades=bot.open_count(),
     )
     opened_any = False
@@ -1201,10 +1344,10 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
                     await asyncio.to_thread(_forensics.record_entry, bot.uid, candidate, opened, accel)
                 except Exception:
                     logger.exception("forensics record_entry failed")
-        _record_learning(candidate.symbol, "auto_entry", "paper", candidate, f"bought ${bot.auto_entry_usd:.0f} @ {fill.fill_price}")
+        _record_learning(candidate.symbol, "auto_entry", "paper", candidate, f"bought ${size:.0f} @ {fill.fill_price}")
         await store.insert_bot_log(
             "PUMP_SCANNER", "TRADE_BUY",
-            f"Auto-entry {candidate.symbol} ${bot.auto_entry_usd:.0f} @ {fill.fill_price}",
+            f"Auto-entry {candidate.symbol} ${size:.0f} @ {fill.fill_price}",
             volumen=candidate.volume_spike,
         )
         await notify.send_entry(notify.format_entry(
@@ -1264,11 +1407,21 @@ async def _perform_scan(min_pump_score: int = 1) -> ScanResponse:
         candidate = _to_candidate(item)
         _candidates[f"{candidate.exchange}:{candidate.symbol}"] = candidate
         if candidate.status == CandidateStatus.waiting_confirmation:
-            await notify.send_alert(format_alert(
-                candidate.symbol, candidate.pump_score, candidate.classification,
-                candidate.flags, cluster=candidate.cluster, exchange=candidate.exchange,
-                liquidity_usd=candidate.liquidity_usd,
-            ))
+            # QUALITY GATE: solo notifica Telegram si cruza los pisos (score/conf/
+            # vol/liq), es ALTA/MEDIA y no está en cooldown. El dashboard + learning
+            # SIGUEN registrando todas (eso es data, no ruido).
+            key = f"{candidate.exchange}:{candidate.symbol}"
+            send, imp, reason = notify.alert_gate.evaluate(
+                key, score=candidate.pump_score, confidence=candidate.confidence_score,
+                vol_spike=candidate.volume_spike, liquidity=candidate.liquidity_usd)
+            if send:
+                await notify.send_alert(format_alert(
+                    candidate.symbol, candidate.pump_score, candidate.classification,
+                    candidate.flags, cluster=candidate.cluster, exchange=candidate.exchange,
+                    liquidity_usd=candidate.liquidity_usd, importance=imp,
+                ))
+            else:
+                logger.info("alerta Telegram suprimida %s: %s [%s]", candidate.symbol, reason, imp)
             await store.insert_alert({
                 "symbol": candidate.symbol, "exchange": candidate.exchange,
                 "pump_score": candidate.pump_score, "classification": candidate.classification,

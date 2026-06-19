@@ -23,6 +23,8 @@ from statistics import mean
 
 import ccxt.async_support as ccxt
 
+from .websocket_manager import get_manager
+
 VELOCITY_TIMEFRAME = os.getenv("PUMP_VELOCITY_TIMEFRAME", "1m")
 VELOCITY_OHLCV_LIMIT = int(os.getenv("PUMP_VELOCITY_OHLCV_LIMIT", "8"))
 ACCEL_FACTOR = float(os.getenv("PUMP_VELOCITY_ACCEL_FACTOR", "4"))   # x baseline volume
@@ -124,6 +126,15 @@ class VelocityWatcher:
             if not metrics:
                 continue
             base, recent_vol, last_close, prev_close, bar_ts = metrics
+            # Prefer the live WebSocket price for the rising/trigger check (sub-second);
+            # volume acceleration stays on the OHLCV (WS tickers don't give 1m volume).
+            # Falls back to the OHLCV close when the WS cache is empty.
+            try:
+                ws_px = get_manager().get_price(entry.exchange, entry.symbol)
+            except Exception:
+                ws_px = None
+            if ws_px and ws_px > 0:
+                last_close = ws_px
             # Re-prime baseline if we had none yet.
             if entry.baseline_vol <= 0:
                 entry.baseline_vol = base

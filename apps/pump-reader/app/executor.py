@@ -45,9 +45,12 @@ def configured_exchanges() -> list[str]:
     return [e.strip().lower() for e in raw.split(",") if e.strip()]
 
 
-# Default risk parameters per entry. SL/TP are percentages off entry price.
-STOP_LOSS_PCT = float(os.getenv("PUMP_STOP_LOSS_PCT", "8"))
-TAKE_PROFIT_PCT = float(os.getenv("PUMP_TAKE_PROFIT_PCT", "25"))
+# STOP_LOSS_PCT / TAKE_PROFIT_PCT removed as fixed exit params — exits are owned
+# by position_manager's DYNAMIC trailing stop now (no 60/40, no fixed TP). They
+# survive only inline in act() to attach a protective SL/TP to a LIVE reduce
+# order; paper ignores them.
+# STOP_LOSS_PCT = float(os.getenv("PUMP_STOP_LOSS_PCT", "8"))
+# TAKE_PROFIT_PCT = float(os.getenv("PUMP_TAKE_PROFIT_PCT", "25"))
 SLIPPAGE_PCT = float(os.getenv("PUMP_PAPER_SLIPPAGE_PCT", "0.5"))
 
 
@@ -218,8 +221,10 @@ class ExecutionEngine:
             return result
 
         per_leg = capital_usd / len(exchanges)
-        sl = reference_price * (1 - STOP_LOSS_PCT / 100)
-        tp = reference_price * (1 + TAKE_PROFIT_PCT / 100)
+        # Read inline (only used to protect a LIVE reduce order; exits owned by
+        # position_manager's dynamic stop).
+        sl = reference_price * (1 - float(os.getenv("PUMP_STOP_LOSS_PCT", "8")) / 100)
+        tp = reference_price * (1 + float(os.getenv("PUMP_TAKE_PROFIT_PCT", "25")) / 100)
         # Caller passes the live OPEN-position count (lifetime fills would block
         # entries forever once the cap is hit). Fall back to lifetime fills.
         base_open = open_trades if open_trades is not None else len(self.positions)
