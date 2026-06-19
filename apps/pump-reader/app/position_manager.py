@@ -1,16 +1,19 @@
-"""Two-phase exit + dump detector for paper pump positions.
+"""Dynamic trailing-stop exit + dump detector for paper pump positions.
 
 Addresses the #1 gap: the bot used to only buy. This manages each open position
-so it is never the exit liquidity:
+so it is never the exit liquidity. ONE strategy on the FULL position (no 60/40):
 
-  Phase 1 (secure capital): at +TP1% sell TP1_FRAC (default 60%).
-  Phase 2 (let it run): remainder rides a trailing stop off the peak.
-  Dump detector: an abrupt one-tick drop panic-sells the remainder at market.
-  Hard stop: a loss past -HARD_STOP% sells everything.
+  Hard stop:    a loss past -HARD_STOP% sells everything.
+  Dump:         an abrupt one-tick drop panic-sells at market.
+  Break-even:   once gain crosses +BREAKEVEN%, the stop locks at entry+margin.
+  Dynamic stop: while in profit a trailing stop ratchets up to
+                peak*(1 - DYNAMIC_STOP%) and only moves up; a fall back to it
+                banks the WHOLE run at once.
+  Time-stop:    a flat move whose 1m volume has FADED is freed (volume-aware).
 
-Entry quality is graded (early/perfect/late) by comparing entry time/price to
-the peak — feeds the learning loop so the bot gets more sensitive after late
-entries.
+Exit params are cluster-aware: long_pump runs tight & fast, classic grinds loose
+& patient (see exit_profile / CLUSTER_TUNE). Entry quality is graded
+(early/perfect/late) vs the peak to feed the learning loop.
 """
 
 from __future__ import annotations
@@ -19,13 +22,6 @@ import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-# TP1 15 (was 30): the bot enters mid-move, so the residual upside is usually
-# modest — a +30% first target rarely triggered, leaving winners to be scratched
-# at break-even. Banking 60% at +15% turns moderate pumps into real wins (the
-# Monte Carlo lifted expectancy ~+0.7%/trade). TRAIL 10 (was 12) tightens give-back.
-TP1_PCT = float(os.getenv("PUMP_TP1_PCT", "15"))          # phase-1 take-profit trigger
-TP1_FRAC = float(os.getenv("PUMP_TP1_FRAC", "0.6"))        # fraction sold in phase 1
-TRAIL_PCT = float(os.getenv("PUMP_TRAIL_PCT", "10"))       # phase-2 trailing stop off peak
 HARD_STOP_PCT = float(os.getenv("PUMP_STOP_LOSS_PCT", "8"))  # hard stop loss
 DUMP_TICK_PCT = float(os.getenv("PUMP_DUMP_TICK_PCT", "10"))  # abrupt one-tick drop = dump
 # Dynamic stop loss: a trailing stop that rides the PEAK for the WHOLE position
@@ -52,34 +48,36 @@ MAX_HOLD_MINUTES = float(os.getenv("PUMP_MAX_HOLD_MINUTES", "45"))
 # long_pump and classic are DIFFERENT setups → different trade management:
 #   long_pump (buyer impulse / parabolic): run the spike, TIGHT trail, FAST cut,
 #             sensitive dump detector — the move is violent and round-trips fast.
-#   classic   (short-squeeze grind): modest TP banked early, LOOSE trail so the
-#             grind isn't shaken out, PATIENT time-stop, tighter hard stop.
-# DEFAULT_PROFILE = the base env constants (used by accumulation / n.a. entries,
-# whose breakout character isn't known yet). Per-cluster keys override it.
-DEFAULT_PROFILE = {
-    "tp1_pct": TP1_PCT, "tp1_frac": TP1_FRAC, "trail_pct": TRAIL_PCT,
-    "hard_stop_pct": HARD_STOP_PCT, "dump_tick_pct": DUMP_TICK_PCT,
-    "timeout_min": TIMEOUT_MINUTES, "max_hold_min": MAX_HOLD_MINUTES,
-}
-CLUSTER_PROFILES = {
-    "long_pump": {"tp1_pct": 25, "tp1_frac": 0.5, "trail_pct": 8, "hard_stop_pct": 8,
-                  "dump_tick_pct": 9, "timeout_min": 6, "max_hold_min": 30},
-    "classic":   {"tp1_pct": 10, "tp1_frac": 0.7, "trail_pct": 14, "hard_stop_pct": 6,
-                  "dump_tick_pct": 12, "timeout_min": 12, "max_hold_min": 60},
+#   classic   (short-squeeze grind): LOOSE trail so the grind isn't shaken out,
+#             PATIENT time-stop, tighter hard stop.
+#   accumulation / n.a.: unknown breakout character → plain env base, no tuning.
+# CLUSTER_TUNE = multipliers applied ON TOP of the live env base, so the 24h
+# auto-optimizer (which mutates os.environ) still tunes the baseline while each
+# cluster keeps its own character relative to it.
+CLUSTER_TUNE = {
+    "long_pump": {"dynamic_stop_pct": 0.8, "hard_stop_pct": 1.3, "dump_tick_pct": 1.1,
+                  "timeout_min": 0.4, "max_hold_min": 0.5},
+    "classic":   {"dynamic_stop_pct": 1.5, "hard_stop_pct": 0.9, "dump_tick_pct": 1.4,
+                  "timeout_min": 1.2, "max_hold_min": 1.2},
 }
 
 
 def exit_profile(cluster: str) -> dict:
-    """Lee variables de entorno en tiempo real para TP/SL/Timeout (así el
-    auto-optimizer de 24h puede ajustarlas mutando os.environ sin reiniciar)."""
+    """Per-trade exit params. Reads env in real time (so the 24h auto-optimizer can
+    retune by mutating os.environ without a restart), then applies the cluster
+    multipliers so long_pump and classic are managed differently."""
     base = {
         "dynamic_stop_pct": float(os.getenv("PUMP_DYNAMIC_STOP_PCT", "5.0")),
-        "hard_stop_pct": float(os.getenv("PUMP_STOP_LOSS_PCT", "2.5")),
-        "dump_tick_pct": float(os.getenv("PUMP_DUMP_TICK_PCT", "8")),
-        "timeout_min": float(os.getenv("PUMP_TIMEOUT_MINUTES", "60")),
-        "max_hold_min": float(os.getenv("PUMP_MAX_HOLD_MINUTES", "90")),
+        "hard_stop_pct": float(os.getenv("PUMP_STOP_LOSS_PCT", "8")),
+        "dump_tick_pct": float(os.getenv("PUMP_DUMP_TICK_PCT", "10")),
+        "timeout_min": float(os.getenv("PUMP_TIMEOUT_MINUTES", "8")),
+        "max_hold_min": float(os.getenv("PUMP_MAX_HOLD_MINUTES", "45")),
     }
-    return {**base}
+    tune = CLUSTER_TUNE.get(cluster)
+    if tune:
+        for k, m in tune.items():
+            base[k] = round(base[k] * m, 2)
+    return base
 
 
 @dataclass
@@ -166,7 +164,7 @@ class PositionManager:
         elapsed_min = (now - pos.entry_at).total_seconds() / 60
 
         # Cluster-aware management: long_pump rides tight/fast, classic grinds
-        # patient/loose (see CLUSTER_PROFILES). Falls back to base env constants.
+        # patient/loose (see CLUSTER_TUNE). Falls back to base env constants.
         p = exit_profile(pos.cluster)
 
         events: list[ExitEvent] = []

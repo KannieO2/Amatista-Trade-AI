@@ -144,14 +144,14 @@ DASHBOARD_HTML = r"""<!doctype html>
   .grid-2e{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   @media(max-width:1100px){.grid-2e{grid-template-columns:1fr}}
   /* KPIs in ONE box (4 flat cells, thin dividers) + a small Alerts box beside it. */
-  .kpirow{display:grid;grid-template-columns:2.7fr 1fr;gap:14px}
+  .kpirow{display:grid;grid-template-columns:1.7fr 1fr;gap:14px}
   @media(max-width:1100px){.kpirow{grid-template-columns:1fr}}
-  .kpibox{padding:6px 4px}
-  .kpi4{display:grid;grid-template-columns:repeat(4,1fr)}
-  @media(max-width:680px){.kpi4{grid-template-columns:1fr 1fr;row-gap:6px}}
-  .kcell{background:none;border:0;box-shadow:none;border-radius:0;padding:8px 16px}
-  .kpi4 .kcell + .kcell{border-left:1px solid var(--border-soft)}
-  .kpibox .kval{font-size:26px;margin-top:6px}
+  .kpibox{padding:0;background:none;border:0;box-shadow:none;overflow:visible}
+  /* 2x2: column-flow so DOM order Tokens/Score/Alerts/Open lands as
+     col1=[Tokens,Score]  col2=[Alerts,Open]  (Score under Tokens, Alerts over Open). */
+  .kpi4{display:grid;grid-template-columns:repeat(2,1fr);grid-template-rows:repeat(2,1fr);grid-auto-flow:column;gap:12px}
+  .kpi4 .kcell{background:var(--inset);border:0;box-shadow:none;border-radius:13px;padding:14px 16px}
+  .kpibox .kval{font-size:26px;margin-top:8px}
   .alertsbox #alerts-body{max-height:220px;overflow-y:auto}
   .grid-2b{display:grid;grid-template-columns:1.5fr 1fr;gap:14px}
   @media(max-width:1100px){.grid-kpi{grid-template-columns:repeat(2,1fr)}.grid-2,.grid-2b{grid-template-columns:1fr}}
