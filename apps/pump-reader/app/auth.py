@@ -170,21 +170,26 @@ LOGIN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@500&display=swap" rel="stylesheet"/>
 <style>
   *{box-sizing:border-box} html,body{height:100%}
-  body{margin:0;font-family:Geist,system-ui,sans-serif;background:#070a0f;color:#e6e9ef;
+  body{margin:0;font-family:Geist,system-ui,sans-serif;background:#080b11;color:#e7ebf2;
     display:flex;align-items:center;justify-content:center;
-    background-image:radial-gradient(800px 400px at 20% 0%,rgba(255,47,110,.10),transparent),radial-gradient(700px 400px at 90% 100%,rgba(124,108,255,.10),transparent)}
-  .card{width:340px;max-width:92vw;background:rgba(16,21,30,.72);border:1px solid rgba(255,255,255,.08);
-    border-radius:16px;padding:26px 24px;backdrop-filter:blur(14px);box-shadow:0 40px 90px -20px rgba(0,0,0,.8)}
-  .logo{display:flex;align-items:center;gap:10px;margin-bottom:18px}
-  .dot{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,#ff2f6e,#7c6cff)}
-  h1{font-size:16px;margin:0;font-weight:600} p{margin:2px 0 0;color:#8b95a7;font-size:12px}
-  label{display:block;font-size:11px;color:#8b95a7;margin:14px 0 5px}
-  input{width:100%;background:#0c1018;border:1px solid #222b3a;border-radius:9px;color:#e6e9ef;
-    padding:10px 12px;font-family:inherit;font-size:13px;outline:none}
-  input:focus{border-color:#3a4760}
-  button{width:100%;margin-top:18px;background:linear-gradient(90deg,#ff2f6e,#ff5a86);border:0;color:#fff;
-    padding:11px;border-radius:9px;font-weight:600;font-size:13px;cursor:pointer;font-family:inherit}
-  .err{color:#ff6b6b;font-size:12px;margin-top:12px;min-height:14px}
+    background-image:radial-gradient(820px 420px at 18% -5%,rgba(160,92,242,.16),transparent),radial-gradient(680px 420px at 95% 105%,rgba(124,108,255,.12),transparent)}
+  .card{width:352px;max-width:92vw;background:rgba(16,21,30,.62);border:1px solid rgba(255,255,255,.08);
+    border-radius:18px;padding:30px 26px;backdrop-filter:blur(16px);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 44px 100px -24px rgba(0,0,0,.85)}
+  .logo{display:flex;align-items:center;gap:11px;margin-bottom:22px}
+  .dot{width:30px;height:30px;border-radius:9px;
+    background:radial-gradient(circle at 30% 30%,#d9b8ff,#a05cf2 55%,#6a2bb0);
+    box-shadow:0 0 0 1px rgba(160,92,242,.35),0 6px 18px -5px rgba(160,92,242,.6)}
+  h1{font-size:16px;margin:0;font-weight:600;letter-spacing:-.01em} p{margin:3px 0 0;color:#6f7a8e;font-size:12px}
+  label{display:block;font-size:11px;color:#6f7a8e;margin:15px 0 6px;letter-spacing:.05em;text-transform:uppercase}
+  input{width:100%;background:#0c1018;border:1px solid #1b2333;border-radius:10px;color:#e7ebf2;
+    padding:11px 13px;font-family:inherit;font-size:13px;outline:none;transition:border-color .15s,box-shadow .15s}
+  input:focus{border-color:#a05cf2;box-shadow:0 0 0 3px rgba(160,92,242,.16)}
+  button{width:100%;margin-top:22px;background:linear-gradient(135deg,#b988f2,#a05cf2 55%,#7a3fd0);border:0;color:#fff;
+    padding:12px;border-radius:10px;font-weight:600;font-size:13px;cursor:pointer;font-family:inherit;
+    box-shadow:0 10px 26px -10px rgba(160,92,242,.7);transition:transform .12s,filter .15s}
+  button:hover{filter:brightness(1.06)} button:active{transform:translateY(1px)}
+  .err{color:#ff6b6b;font-size:12px;margin-top:13px;min-height:14px}
 </style></head><body>
   <form class="card" method="post" action="/login">
     <div class="logo"><div class="dot"></div><div><h1>Amatista · TradeOS</h1><p>Pump Radar + Grid · entrar</p></div></div>

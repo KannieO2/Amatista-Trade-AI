@@ -869,27 +869,35 @@ ADMIN_USERS_HTML = """<!doctype html><html lang="es"><head><meta charset="utf-8"
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap" rel="stylesheet"/>
 <style>
-  *{box-sizing:border-box} body{margin:0;font-family:Geist,system-ui,sans-serif;background:#070a0f;color:#e6e9ef;padding:24px}
-  .wrap{max-width:760px;margin:0 auto}
-  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
-  h1{font-size:18px;margin:0;font-weight:600}
-  a.back{color:#8b95a7;text-decoration:none;font-size:13px} a.back:hover{color:#ff5a86}
-  .card{background:#0c1018;border:1px solid #1b2230;border-radius:14px;padding:18px;margin-bottom:16px}
-  .card h2{font-size:13px;margin:0 0 12px;color:#b6bdcc;font-weight:600}
-  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
-  .fld{flex:1;min-width:140px} label{display:block;font-size:11px;color:#8b95a7;margin:0 0 5px}
-  input,select{width:100%;background:#070a0f;border:1px solid #222b3a;border-radius:9px;color:#e6e9ef;padding:9px 11px;font-family:inherit;font-size:13px;outline:none}
-  input:focus,select:focus{border-color:#3a4760}
-  button{background:linear-gradient(90deg,#ff2f6e,#ff5a86);border:0;color:#fff;padding:9px 16px;border-radius:9px;font-weight:600;font-size:13px;cursor:pointer;font-family:inherit}
-  button.ghost{background:transparent;border:1px solid #33405a;color:#b6bdcc}
-  table{width:100%;border-collapse:collapse;font-size:13px} th{text-align:left;color:#8b95a7;font-weight:500;font-size:11px;padding:8px 10px;border-bottom:1px solid #1b2230}
-  td{padding:10px;border-bottom:1px solid #131923}
-  .tag{font-size:11px;padding:2px 8px;border-radius:6px;border:1px solid #33405a;color:#b6bdcc}
-  .tag.admin{color:#ff8fb0;border-color:#ff2f6e44} .tag.on{color:#43d39e;border-color:#43d39e44} .tag.off{color:#ff6b6b;border-color:#ff6b6b44}
-  .msg{font-size:12px;margin-top:10px;min-height:14px} .msg.err{color:#ff6b6b} .msg.ok{color:#43d39e}
+  *{box-sizing:border-box} body{margin:0;font-family:Geist,system-ui,sans-serif;background:#080b11;color:#e7ebf2;padding:26px;
+    background-image:radial-gradient(900px 460px at 12% -8%,rgba(160,92,242,.10),transparent)}
+  .wrap{max-width:820px;margin:0 auto}
+  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+  .brand{display:flex;align-items:center;gap:11px}
+  .brand .dot{width:26px;height:26px;border-radius:8px;
+    background:radial-gradient(circle at 30% 30%,#d9b8ff,#a05cf2 55%,#6a2bb0);
+    box-shadow:0 0 0 1px rgba(160,92,242,.35),0 5px 15px -5px rgba(160,92,242,.55)}
+  h1{font-size:18px;margin:0;font-weight:600;letter-spacing:-.01em}
+  a.back{color:#6f7a8e;text-decoration:none;font-size:13px;transition:color .15s} a.back:hover{color:#a05cf2}
+  .card{background:rgba(16,21,30,.55);border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:20px;margin-bottom:16px;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 18px 40px -26px rgba(0,0,0,.7)}
+  .card h2{font-size:11px;margin:0 0 14px;color:#6f7a8e;font-weight:600;letter-spacing:.1em;text-transform:uppercase}
+  .row{display:flex;gap:11px;flex-wrap:wrap;align-items:end}
+  .fld{flex:1;min-width:150px} label{display:block;font-size:11px;color:#6f7a8e;margin:0 0 6px;letter-spacing:.05em;text-transform:uppercase}
+  input,select{width:100%;background:#0c1018;border:1px solid #1b2333;border-radius:10px;color:#e7ebf2;padding:10px 12px;font-family:inherit;font-size:13px;outline:none;transition:border-color .15s,box-shadow .15s}
+  input:focus,select:focus{border-color:#a05cf2;box-shadow:0 0 0 3px rgba(160,92,242,.16)}
+  button{background:linear-gradient(135deg,#b988f2,#a05cf2 55%,#7a3fd0);border:0;color:#fff;padding:10px 18px;border-radius:10px;font-weight:600;font-size:13px;cursor:pointer;font-family:inherit;box-shadow:0 10px 24px -12px rgba(160,92,242,.7);transition:transform .12s,filter .15s}
+  button:hover{filter:brightness(1.06)} button:active{transform:translateY(1px)}
+  button.ghost{background:transparent;border:1px solid #2a3447;color:#aeb6c6;box-shadow:none}
+  button.ghost:hover{border-color:#a05cf2;color:#fff;filter:none}
+  table{width:100%;border-collapse:collapse;font-size:13px} th{text-align:left;color:#6f7a8e;font-weight:500;font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:9px 10px;border-bottom:1px solid #1b2333}
+  td{padding:11px 10px;border-bottom:1px solid #131923}
+  .tag{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.04em;padding:3px 10px;border-radius:999px;background:rgba(255,255,255,.05);color:#aeb6c6}
+  .tag.admin{color:#c69cff;background:rgba(160,92,242,.16)} .tag.on{color:#2fd08a;background:rgba(47,208,138,.15)} .tag.off{color:#ff6b6b;background:rgba(232,85,106,.15)}
+  .msg{font-size:12px;margin-top:11px;min-height:14px} .msg.err{color:#ff6b6b} .msg.ok{color:#2fd08a}
   .acts{display:flex;gap:6px;justify-content:flex-end}
 </style></head><body><div class="wrap">
-  <div class="top"><h1>Cuentas · TradeOS AI</h1><a class="back" href="/">← Volver al panel</a></div>
+  <div class="top"><div class="brand"><div class="dot"></div><h1>Cuentas · TradeOS AI</h1></div><a class="back" href="/">← Volver al panel</a></div>
   <div class="card">
     <h2>Crear cuenta</h2>
     <div class="row">
