@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import statistics
 import sys
 import traceback
 from contextlib import asynccontextmanager
@@ -18,7 +19,7 @@ from contextlib import asynccontextmanager
 import httpx
 from datetime import UTC, datetime
 from enum import StrEnum
-from statistics import mean, median
+from statistics import mean, median, stdev  # noqa: F401
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -49,7 +50,7 @@ from .position_manager import (
     BREAKEVEN_PCT, DUMP_TICK_PCT, TIMEOUT_MINUTES, ManagedPosition, PositionManager,
 )
 from .risk import RiskGuard
-from .scanner import ScannedCandidate, fetch_token_detail, forensic_check, scan_markets
+from .scanner import ScannedCandidate, _cluster, fetch_token_detail, forensic_check, scan_markets
 from .velocity import VelocityWatcher, watch_list_from_scores
 from .learning import LearningLab
 from .user_bot import PAPER_BALANCE, UserBot, all_bots, default_allocation, ensure_bots, get_bot
@@ -121,6 +122,13 @@ class TokenCandidate(BaseModel):
     manipulation_suspect: bool = False
     flags: list[str] = Field(default_factory=list)
     spark: list[float] = Field(default_factory=list)
+    # FSM (Fase 2) analysis merged in, so the Análisis view = market + pre-pump
+    # analysis in one table. None until the token enters the pipeline.
+    fsm_state: str | None = None
+    fsm_acc: int | None = None
+    fsm_pers: int | None = None
+    fsm_rug: int | None = None
+    fsm_confirm: int | None = None
     status: CandidateStatus
     updated_at: datetime
 
@@ -166,6 +174,14 @@ _last_scan_at: datetime | None = None
 # threshold so the exit engine has something to manage. Never auto-enters live.
 AUTO_ENTRY = os.getenv("PUMP_AUTO_ENTRY", "true").lower() == "true"
 AUTO_ENTRY_USD = float(os.getenv("PUMP_AUTO_ENTRY_USD", "100"))
+# Entry authority. The pump must be caught BEFORE it runs, so by default ONLY the
+# pre-pump FSM (accumulation/persistence/rug over a window) may auto-enter. The
+# momentum scan-path (pump_score>=threshold = already up) and the velocity-accel
+# path (a move already underway) are LATE BY CONSTRUCTION. Their auto-entry is OFF
+# by default — they still scan, alert and feed the recorder/FSM, they just don't
+# buy the breakout. Flip these on only to deliberately allow late momentum chasing.
+MOMENTUM_AUTOENTRY = os.getenv("PUMP_MOMENTUM_AUTOENTRY", "false").lower() == "true"
+VELOCITY_AUTOENTRY = os.getenv("PUMP_VELOCITY_AUTOENTRY", "false").lower() == "true"
 # Entry momentum/exhaustion gate (anti-chase): skip a candidate already up this
 # much on 24h (the pump ran — buying it = buying the top), and require a minimum
 # volume spike behind scan-path entries.
@@ -250,6 +266,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_daily_discover_loop()),
         asyncio.create_task(_observe_loop()),
         asyncio.create_task(_pipeline_loop()),
+        asyncio.create_task(_optimization_loop()),
     ]
     asyncio.create_task(notify.send_system(
         f"🟢 <b>Bot iniciado</b> · modo {os.getenv('PUMP_EXEC_MODE', 'paper')} · "
@@ -390,6 +407,11 @@ async def _velocity_loop() -> None:
                     candidate.symbol, "velocity_trigger", "paper", candidate,
                     f"vol accel {t.accel:.1f}x @ {t.price}",
                 )
+                # Velocity = a move already underway = LATE. Off by default; the
+                # trigger is still recorded above (alert/observation) but does not
+                # buy unless momentum chasing is explicitly re-enabled.
+                if not VELOCITY_AUTOENTRY:
+                    continue
                 # Every user's bot enters independently — only if THAT user has
                 # auto-entry on and isn't already in the symbol.
                 for bot in all_bots():
@@ -440,6 +462,43 @@ def _find_candidate(exchange: str, symbol: str) -> TokenCandidate | None:
     return None
 
 
+def _candidate_from_micro(exchange: str, symbol: str, intent_score: int) -> TokenCandidate | None:
+    """FSM confirmed a PRE-PUMP entry but the scan loop already cleared the
+    candidate from _candidates (confirmation takes minutes; the scan refreshes
+    faster). Rebuild a minimal candidate from the latest micro_snapshot (<=60s
+    old) so the early signal is NOT lost. Carries the real book metrics the
+    ForensicFilter + RiskGuard need — no fabricated data."""
+    if _micro is None:
+        return None
+    try:
+        rows = _micro.store.recent(symbol, exchange, 10)
+    except Exception:
+        return None
+    if not rows:
+        return None
+    r = rows[-1]
+    price = float(r.get("last_price") or 0.0)
+    if price <= 0:
+        return None
+    velocity = float(r.get("velocity") or 1.0)
+    imbalance = float(r.get("imbalance") or 0.0)
+    # Derive the cluster from the live book so the exit profile differentiates:
+    # flat + stacked bids = classic (grind); volume surging = long_pump (impulse).
+    cluster = _cluster(price_change_pct=0.0, volume_spike=velocity, imbalance=imbalance)
+    return TokenCandidate(
+        id=str(uuid4()), symbol=symbol.upper(), exchange=exchange.lower(),
+        last_price=price, quote_volume_24h=0.0, price_change_pct_24h=0.0,
+        volume_spike=velocity,
+        orderbook_imbalance=imbalance,
+        liquidity_usd=float(r.get("liquidity_usd") or 0.0),
+        pump_score=int(intent_score), confidence_score=100,
+        classification="pre_pump_accumulation", cluster=cluster,
+        spread_pct=float(r.get("spread_pct") or 0.0),
+        top_book_share=float(r.get("top_book_share") or 0.0),
+        status=CandidateStatus.approved, updated_at=datetime.now(UTC),
+    )
+
+
 async def _pipeline_loop() -> None:
     """FASE 2: avanza la máquina de estados cada PIPELINE_TICK_SECONDS. En modo
     shadow solo registra en decision_log lo que HARÍA; en enforcing ejecuta los
@@ -453,11 +512,24 @@ async def _pipeline_loop() -> None:
                     for it in intents:
                         cand = _find_candidate(it.exchange, it.symbol)
                         if cand is None:
-                            continue  # el scan ya soltó el candidato; no se reconstruye
+                            # Scan dropped it — rebuild from the live micro series
+                            # so the PRE-PUMP signal isn't lost (the whole point).
+                            cand = _candidate_from_micro(it.exchange, it.symbol, it.scores.accumulation)
+                        if cand is None:
+                            continue
+                        entered = False
                         for bot in all_bots():
-                            if bot.auto_entry and not bot.pm.has(it.exchange, it.symbol):
-                                await _auto_enter(bot, cand)
-                        _pipeline.mark_entered(it.symbol, it.exchange)
+                            if not bot.auto_entry:
+                                continue
+                            if bot.pm.has(it.exchange, it.symbol):
+                                entered = True          # already holding it
+                                continue
+                            if await _auto_enter(bot, cand, fsm_path=True):
+                                entered = True          # real fill happened
+                        # Mark 'entry' ONLY on an actual buy. If forensic/risk blocked
+                        # it, stays in confirmation and retries next tick (or expires).
+                        if entered:
+                            _pipeline.mark_entered(it.symbol, it.exchange)
         except Exception:
             logger.exception("pipeline loop failed")
         await asyncio.sleep(PIPELINE_TICK_SECONDS)
@@ -572,19 +644,74 @@ THRESHOLD_CEIL = float(os.getenv("PUMP_THRESHOLD_CEIL", "90"))
 
 
 def _apply_learning(quality: str, pnl: float) -> None:
-    """Loss-averse feedback loop. A LOSING close means the bot entered noise →
-    raise the confirmation threshold (be MORE selective). A clean early entry on a
-    real pump can afford a touch more aggression.
-
-    This REPLACES the old loop that lowered the bar after weak ("late") trades —
-    that spiralled: each small-loss timeout made the bot less selective, which
-    bought more noise, which produced more small-loss timeouts."""
+    """Loss-averse feedback loop mejorado para ajuste más rápido."""
     global _adaptive_threshold
+    # Si pierdes, sube el umbral (más selectivo)
     if pnl < 0:
-        _adaptive_threshold = min(THRESHOLD_CEIL, _adaptive_threshold + 2)   # pickier after a loss
-    elif quality == "early_entry":
-        _adaptive_threshold = max(THRESHOLD_FLOOR, _adaptive_threshold - 1)  # real pump caught early
-    # a small win that wasn't an early entry leaves the threshold where it is
+        _adaptive_threshold = min(THRESHOLD_CEIL, _adaptive_threshold + 3)
+    # Si ganas con una entrada temprana, baja el umbral (más agresivo)
+    elif quality == "early_entry" and pnl > 5:
+        _adaptive_threshold = max(THRESHOLD_FLOOR, _adaptive_threshold - 2)
+    # Si ganas pero entraste tarde, no toques el umbral
+    elif quality == "late_entry" and pnl > 0:
+        pass  # mantener
+    # Si pierdes por Time Out, sube el umbral (más selectivo)
+    elif quality == "timeout" and pnl < 0:
+        _adaptive_threshold = min(THRESHOLD_CEIL, _adaptive_threshold + 5)
+
+    # Limitar el umbral al rango permitido
+    _adaptive_threshold = max(THRESHOLD_FLOOR, min(THRESHOLD_CEIL, _adaptive_threshold))
+
+
+async def _optimize_tp_sl() -> None:
+    """Optimiza TP/SL basado en forensics cada 24h."""
+    global _forensics
+    if _forensics is None:
+        return
+    try:
+        opt = await asyncio.to_thread(_forensics.optimize_tp_sl)
+        if opt.get("tp") and opt.get("sl"):
+            os.environ["PUMP_TAKE_PROFIT_PCT"] = str(opt["tp"])
+            os.environ["PUMP_STOP_LOSS_PCT"] = str(opt["sl"])
+            logger.info(f"✅ TP/SL optimizado: TP={opt['tp']}%, SL={opt['sl']}% | Avg Win: {opt['avg_win']:.1f}%, Avg Loss: {opt['avg_loss']:.1f}%")
+    except Exception:
+        logger.exception("TP/SL optimization failed")
+
+
+async def _optimize_timeout() -> None:
+    """Optimiza Timeout basado en learning cada 24h."""
+    global _lab
+    try:
+        opt = await asyncio.to_thread(_lab.optimize_timeout)
+        if opt.get("timeout"):
+            os.environ["PUMP_TIMEOUT_MINUTES"] = str(opt["timeout"])
+            logger.info(f"✅ Timeout optimizado: {opt['timeout']} min | Avg Lead: {opt['avg_lead']:.1f}min, Std: {opt['std_lead']:.1f}min")
+    except Exception:
+        logger.exception("Timeout optimization failed")
+
+
+async def _optimization_loop() -> None:
+    """Bucle que ejecuta la optimización de parámetros cada 24h."""
+    global _adaptive_threshold
+    while True:
+        await asyncio.sleep(86400)  # 24 horas
+        try:
+            await _optimize_tp_sl()
+            await _optimize_timeout()
+
+            metrics = await asyncio.to_thread(_lab.metrics)
+            if metrics.get("precision") is not None:
+                precision = metrics["precision"]
+                if precision < 0.4:
+                    new_threshold = min(90, _adaptive_threshold + 5)
+                elif precision > 0.6:
+                    new_threshold = max(30, _adaptive_threshold - 5)
+                else:
+                    new_threshold = _adaptive_threshold
+                _adaptive_threshold = new_threshold
+                logger.info(f"✅ Umbral ajustado: {_adaptive_threshold} (precisión: {precision:.0%})")
+        except Exception:
+            logger.exception("Optimization loop failed")
 
 
 app = FastAPI(title="TradeOS AI Pump Reader", version="0.4.0", lifespan=lifespan)
@@ -935,6 +1062,27 @@ def _status_for(pump_score: int) -> CandidateStatus:
     return CandidateStatus.watching
 
 
+# A token already up this much on 24h has ALREADY pumped — the move happened. It is
+# NOT a candidate to enter (the chase gate blocks it and momentum auto-entry is
+# off), so showing it on the candidate boards just looks like the bot is "late".
+# Hide post-pump blow-offs from the candidate views — the dashboard should show
+# PRE-pump / early setups. The scan still feeds micro/FSM in the background.
+POSTPUMP_HIDE_PCT = float(os.getenv("PUMP_POSTPUMP_HIDE_PCT", str(ENTRY_MAX_CHASE_PCT)))
+
+
+def _is_candidate_display(c: TokenCandidate) -> bool:
+    """True if this is still a forward-looking candidate (not an already-run pump)."""
+    return c.price_change_pct_24h < POSTPUMP_HIDE_PCT
+
+
+# Pre-pump entries trade SMALLER accumulation tokens — their books are naturally
+# thinner than the big momentum gainers, so the 120k forensic floor (tuned for the
+# rug fat-tail of momentum CHASING) blocks every single one → nothing ever buys.
+# The FSM rug_risk score already vetted the live book for deterioration, so the
+# pre-pump path uses a lower floor. Still blocks the genuinely rug-thin (<40k).
+PREPUMP_MIN_LIQUIDITY_USD = float(os.getenv("PUMP_PREPUMP_MIN_LIQUIDITY_USD", "40000"))
+
+
 def _to_candidate(scanned: ScannedCandidate) -> TokenCandidate:
     return TokenCandidate(
         id=str(uuid4()),
@@ -969,7 +1117,9 @@ async def health() -> dict[str, str]:
 
 @app.get("/candidates", response_model=list[TokenCandidate])
 async def list_candidates() -> list[TokenCandidate]:
-    return sorted(_candidates.values(), key=lambda c: c.pump_score, reverse=True)
+    # Hide already-pumped blow-offs — they are not candidates to enter.
+    shown = [c for c in _candidates.values() if _is_candidate_display(c)]
+    return sorted(shown, key=lambda c: c.pump_score, reverse=True)
 
 
 def _scan_exchanges() -> list[str]:
@@ -977,37 +1127,48 @@ def _scan_exchanges() -> list[str]:
     return [e.strip().lower() for e in raw.split(",") if e.strip()]
 
 
-async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | None = None) -> None:
+async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | None = None,
+                      fsm_path: bool = False) -> bool:
     """Paper-only auto buy on a confirmed candidate into ONE user's bot; hand it
     to that bot's exit engine.
 
-    Gates, in order: (1) confidence floor; (2) momentum/exhaustion — don't chase a
-    pump that already ran (buying the blow-off top) and require real volume behind
-    it; (3) ForensicFilter — real CEX-sourced spread/liquidity/book checks. A
-    blocked candidate is logged and skipped — never bought."""
-    # (1) Confidence gate — only act on signals the scanner trusts.
-    if candidate.confidence_score < ENTRY_MIN_CONFIDENCE:
-        _record_learning(candidate.symbol, "skip_low_confidence", "paper", candidate,
-                         f"confianza {candidate.confidence_score} < {ENTRY_MIN_CONFIDENCE:.0f}")
-        return
-    # (2) Momentum / exhaustion gate — the #1 source of "enter then time out at a
-    # small loss" churn is chasing finished or thin pumps.
-    if candidate.price_change_pct_24h >= ENTRY_MAX_CHASE_PCT:
-        _record_learning(candidate.symbol, "skip_exhausted", "paper", candidate,
-                         f"+{candidate.price_change_pct_24h:.0f}% 24h ya corrido (chase)")
-        return
-    # Volume floor applies to scan-path entries. Velocity-path entries (accel set)
-    # already proved live acceleration + rising price, so they skip this.
-    if accel is None and candidate.volume_spike < ENTRY_MIN_VOL_SPIKE:
-        _record_learning(candidate.symbol, "skip_low_volume", "paper", candidate,
-                         f"vol spike {candidate.volume_spike:.1f}x < {ENTRY_MIN_VOL_SPIKE}x")
-        return
+    Two entry paths:
+      - momentum/scan path (fsm_path=False): gates (1) confidence, (2) anti-chase,
+        (3) volume floor — these stop the bot from chasing a pump that already ran.
+      - PRE-PUMP path (fsm_path=True): the FSM already validated sustained
+        accumulation + persistence + low rug-risk over a window. That IS the
+        quality signal, and it is the OPPOSITE of chasing, so the anti-chase
+        gates are skipped. The CAPITAL protections (ForensicFilter liquidity/
+        spread/concentration + RiskGuard) still apply to every entry.
+    Returns True only if a real position was opened (so the FSM marks 'entry'
+    ONLY on an actual fill — a blocked candidate must NOT show as entered)."""
+    if not fsm_path:
+        # (1) Confidence gate — only act on signals the scanner trusts.
+        if candidate.confidence_score < ENTRY_MIN_CONFIDENCE:
+            _record_learning(candidate.symbol, "skip_low_confidence", "paper", candidate,
+                             f"confianza {candidate.confidence_score} < {ENTRY_MIN_CONFIDENCE:.0f}")
+            return False
+        # (2) Momentum / exhaustion gate — the #1 source of "enter then time out at
+        # a small loss" churn is chasing finished or thin pumps.
+        if candidate.price_change_pct_24h >= ENTRY_MAX_CHASE_PCT:
+            _record_learning(candidate.symbol, "skip_exhausted", "paper", candidate,
+                             f"+{candidate.price_change_pct_24h:.0f}% 24h ya corrido (chase)")
+            return False
+        # Volume floor applies to scan-path entries. Velocity-path entries (accel
+        # set) already proved live acceleration + rising price, so they skip this.
+        if accel is None and candidate.volume_spike < ENTRY_MIN_VOL_SPIKE:
+            _record_learning(candidate.symbol, "skip_low_volume", "paper", candidate,
+                             f"vol spike {candidate.volume_spike:.1f}x < {ENTRY_MIN_VOL_SPIKE}x")
+            return False
 
-    # (2) ForensicFilter.
+    # (3) ForensicFilter — ALWAYS applies (capital integrity). Pre-pump uses a
+    # lower liquidity floor (accumulation tokens have thinner books; rug already
+    # vetted by the FSM rug_risk score).
     ok, reasons = forensic_check(
         spread_pct=candidate.spread_pct,
         liquidity_usd=candidate.liquidity_usd,
         top_book_share=candidate.top_book_share,
+        min_liquidity_usd=PREPUMP_MIN_LIQUIDITY_USD if fsm_path else None,
     )
     if not ok:
         _record_learning(candidate.symbol, "forensic_block", "paper", candidate, "; ".join(reasons))
@@ -1016,20 +1177,23 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
             f"ForensicFilter bloqueó {candidate.symbol}: {'; '.join(reasons)}",
         )
         logger.info("forensic block %s: %s", candidate.symbol, reasons)
-        return
+        return False
 
     result = await bot.engine.act(
         symbol=candidate.symbol, side=Side.buy, reference_price=candidate.last_price,
         capital_usd=bot.auto_entry_usd, exchanges=[candidate.exchange],
         open_trades=bot.open_count(),
     )
+    opened_any = False
     for fill in result.fills:
         bot.pm.open(
             symbol=fill.symbol, exchange=fill.exchange, entry_price=fill.fill_price,
             qty=fill.amount, pump_score=candidate.pump_score, classification=candidate.classification,
+            cluster=candidate.cluster,
         )
         opened = bot.pm.positions.get(bot.pm.key(fill.exchange, fill.symbol))
         if opened:
+            opened_any = True
             await _persist_position(bot, opened)
             # Forensics (Fase 7/8): captura el contexto de ENTRADA del trade.
             if _forensics is not None:
@@ -1052,6 +1216,7 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
         ))
     for rej in result.rejected:
         logger.info("auto-entry rejected %s: %s", candidate.symbol, rej)
+    return opened_any
 
 
 # Cross-exchange arbitrage detection. OFF by default — it is alert-only (can't
@@ -1129,9 +1294,9 @@ async def _perform_scan(min_pump_score: int = 1) -> ScanResponse:
                     "liquidity_usd": candidate.liquidity_usd,
                 },
             )
-            if current_mode() == ExecMode.paper:
-                # Each user's bot enters independently (own balance/caps), only if
-                # that user has auto-entry enabled.
+            if current_mode() == ExecMode.paper and MOMENTUM_AUTOENTRY:
+                # LATE path (off by default): only runs if momentum chasing is
+                # explicitly re-enabled. The pre-pump FSM is the default authority.
                 for bot in all_bots():
                     if bot.auto_entry and not bot.pm.has(candidate.exchange, candidate.symbol):
                         await _auto_enter(bot, candidate)
@@ -1277,8 +1442,20 @@ def _req_bot(request: Request) -> UserBot:
 @app.get("/overview")
 async def overview(request: Request) -> dict:
     bot = _req_bot(request)
-    ranked = sorted(_candidates.values(), key=lambda c: c.pump_score, reverse=True)
+    # Candidate boards exclude already-pumped blow-offs (post-pump ≠ candidate).
+    shown = [c for c in _candidates.values() if _is_candidate_display(c)]
+    ranked = sorted(shown, key=lambda c: c.pump_score, reverse=True)
     top = ranked[0] if ranked else None
+    # PRE-PUMP pipeline (the real "antes del estallido" candidates): tokens the FSM
+    # is analysing for accumulation + the ones it confirmed/entered. This is what
+    # the main "Candidatos pre-estallido" board shows (momentum gainers live in the
+    # separate Mercado/Tokens view).
+    prepump: list[dict] = []
+    if _pipeline is not None:
+        try:
+            prepump = _pipeline.board(limit=20)
+        except Exception:
+            prepump = []
     alerts = [c for c in ranked if c.status == CandidateStatus.waiting_confirmation]
 
     return {
@@ -1320,6 +1497,7 @@ async def overview(request: Request) -> dict:
             }
             for c in ranked[:12]
         ],
+        "prepump": prepump,
         "latest_alerts": [
             {
                 "symbol": c.symbol,
@@ -1463,6 +1641,7 @@ async def act_on_candidate(request: Request, symbol: str, capital_usd: float = 1
         bot.pm.open(
             symbol=fill.symbol, exchange=fill.exchange, entry_price=fill.fill_price,
             qty=fill.amount, pump_score=candidate.pump_score, classification=candidate.classification,
+            cluster=candidate.cluster,
         )
         opened = bot.pm.positions.get(bot.pm.key(fill.exchange, fill.symbol))
         if opened:

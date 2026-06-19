@@ -43,6 +43,41 @@ TIMEOUT_NO_VOL_MINUTES = float(os.getenv("PUMP_TIMEOUT_NO_VOL_MINUTES", "20"))
 # Hard backstop: cap the hold even if volume persists but price goes nowhere.
 MAX_HOLD_MINUTES = float(os.getenv("PUMP_MAX_HOLD_MINUTES", "45"))
 
+# --- Cluster-aware exit profiles --------------------------------------------
+# long_pump and classic are DIFFERENT setups → different trade management:
+#   long_pump (buyer impulse / parabolic): run the spike, TIGHT trail, FAST cut,
+#             sensitive dump detector — the move is violent and round-trips fast.
+#   classic   (short-squeeze grind): modest TP banked early, LOOSE trail so the
+#             grind isn't shaken out, PATIENT time-stop, tighter hard stop.
+# DEFAULT_PROFILE = the base env constants (used by accumulation / n.a. entries,
+# whose breakout character isn't known yet). Per-cluster keys override it.
+DEFAULT_PROFILE = {
+    "tp1_pct": TP1_PCT, "tp1_frac": TP1_FRAC, "trail_pct": TRAIL_PCT,
+    "hard_stop_pct": HARD_STOP_PCT, "dump_tick_pct": DUMP_TICK_PCT,
+    "timeout_min": TIMEOUT_MINUTES, "max_hold_min": MAX_HOLD_MINUTES,
+}
+CLUSTER_PROFILES = {
+    "long_pump": {"tp1_pct": 25, "tp1_frac": 0.5, "trail_pct": 8, "hard_stop_pct": 8,
+                  "dump_tick_pct": 9, "timeout_min": 6, "max_hold_min": 30},
+    "classic":   {"tp1_pct": 10, "tp1_frac": 0.7, "trail_pct": 14, "hard_stop_pct": 6,
+                  "dump_tick_pct": 12, "timeout_min": 12, "max_hold_min": 60},
+}
+
+
+def exit_profile(cluster: str) -> dict:
+    """Lee variables de entorno en tiempo real para TP/SL/Timeout (así el
+    auto-optimizer de 24h puede ajustarlas mutando os.environ sin reiniciar)."""
+    base = {
+        "tp1_pct": float(os.getenv("PUMP_TAKE_PROFIT_PCT", "35")),
+        "tp1_frac": float(os.getenv("PUMP_TP1_FRAC", "0.6")),
+        "trail_pct": float(os.getenv("PUMP_TRAIL_PCT", "5")),
+        "hard_stop_pct": float(os.getenv("PUMP_STOP_LOSS_PCT", "2.5")),
+        "dump_tick_pct": float(os.getenv("PUMP_DUMP_TICK_PCT", "8")),
+        "timeout_min": float(os.getenv("PUMP_TIMEOUT_MINUTES", "15")),
+        "max_hold_min": float(os.getenv("PUMP_MAX_HOLD_MINUTES", "60")),
+    }
+    return {**base}
+
 
 @dataclass
 class ManagedPosition:
@@ -60,6 +95,7 @@ class ManagedPosition:
     closed: bool = False
     pump_score: int = 0
     classification: str = "n/a"
+    cluster: str = "n/a"          # long_pump | classic | accumulation → exit profile
     be_armed: bool = False        # break-even stop activated (gain crossed BREAKEVEN_PCT)
     be_stop: float = 0.0          # break-even stop price (entry + margin)
     peak_volume: float = 0.0      # max 1m volume seen during the trade (fuel gauge)
@@ -92,7 +128,7 @@ class PositionManager:
         return pos is not None and not pos.closed
 
     def open(self, *, symbol: str, exchange: str, entry_price: float, qty: float,
-             pump_score: int = 0, classification: str = "n/a",
+             pump_score: int = 0, classification: str = "n/a", cluster: str = "n/a",
              now: datetime | None = None) -> None:
         if entry_price <= 0 or qty <= 0:
             return
@@ -101,6 +137,7 @@ class PositionManager:
             symbol=symbol, exchange=exchange, entry_price=entry_price, qty=qty,
             initial_qty=qty, entry_at=now, peak_price=entry_price, peak_at=now,
             last_price=entry_price, pump_score=pump_score, classification=classification,
+            cluster=cluster,
         )
 
     def step(self, key: str, price: float, volume: float | None = None,
@@ -124,13 +161,17 @@ class PositionManager:
         tick_drop = (prev - price) / prev * 100 if prev > 0 else 0
         elapsed_min = (now - pos.entry_at).total_seconds() / 60
 
+        # Cluster-aware management: long_pump rides tight/fast, classic grinds
+        # patient/loose (see CLUSTER_PROFILES). Falls back to base env constants.
+        p = exit_profile(pos.cluster)
+
         events: list[ExitEvent] = []
         # Hard stop first (capital protection priority).
-        if gain <= -HARD_STOP_PCT:
+        if gain <= -p["hard_stop_pct"]:
             events.append(self._sell(pos, price, 1.0, "hard_stop"))
             return events
         # Dump detector: abrupt one-tick collapse -> panic sell the rest.
-        if tick_drop >= DUMP_TICK_PCT:
+        if tick_drop >= p["dump_tick_pct"]:
             events.append(self._sell(pos, price, 1.0, "dump"))
             return events
         # Break-even: once gain crossed +BREAKEVEN_PCT, the stop moves to entry +
@@ -144,19 +185,20 @@ class PositionManager:
         # Dynamic time-stop. A flat move (|gain| <= band) is NOT cut just for being
         # slow — only when its FUEL is gone. While 1m volume stays alive (>= frac of
         # peak), a sideways pump keeps running; once volume fades, free the capital.
-        if self._time_stop_fires(pos, gain, elapsed_min):
+        if self._time_stop_fires(pos, gain, elapsed_min, p):
             events.append(self._sell(pos, price, 1.0, "timeout"))
             return events
         # Phase 1: secure capital with a partial take-profit.
-        if pos.phase == 1 and gain >= TP1_PCT:
-            events.append(self._sell(pos, price, TP1_FRAC, "tp1"))
+        if pos.phase == 1 and gain >= p["tp1_pct"]:
+            events.append(self._sell(pos, price, p["tp1_frac"], "tp1"))
             pos.phase = 2
         # Phase 2: trailing stop on the remainder.
-        if pos.phase == 2 and not pos.closed and drop_from_peak >= TRAIL_PCT:
+        if pos.phase == 2 and not pos.closed and drop_from_peak >= p["trail_pct"]:
             events.append(self._sell(pos, price, 1.0, "trailing"))
         return events
 
-    def _time_stop_fires(self, pos: ManagedPosition, gain: float, elapsed_min: float) -> bool:
+    def _time_stop_fires(self, pos: ManagedPosition, gain: float, elapsed_min: float,
+                         p: dict | None = None) -> bool:
         """Volume-aware time-stop. Returns True only for a flat move that should be
         cut. Logic:
           - not lateral (|gain| > band)            -> never (let TP/trail/stop run)
@@ -164,14 +206,15 @@ class PositionManager:
           - no volume data + past NO_VOL_MINUTES    -> cut (longer fallback grace)
           - volume ALIVE                            -> hold, until MAX_HOLD backstop
         """
+        p = p or exit_profile(pos.cluster)
         if abs(gain) > TIMEOUT_BAND_PCT:
             return False
         have_vol = pos.peak_volume > 0 and pos.last_volume > 0
         if have_vol:
             faded = pos.last_volume < VOLUME_ALIVE_FRAC * pos.peak_volume
-            if faded and elapsed_min >= TIMEOUT_MINUTES:
+            if faded and elapsed_min >= p["timeout_min"]:
                 return True            # flat + fuel gone = dead
-            if elapsed_min >= MAX_HOLD_MINUTES:
+            if elapsed_min >= p["max_hold_min"]:
                 return True            # backstop: capped even if volume persists
             return False               # alive volume -> keep the sideways pump
         # No volume signal: fall back to a plain (longer) time-stop.

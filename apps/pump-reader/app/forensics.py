@@ -199,6 +199,38 @@ class ForensicsStore:
     def all_rows(self) -> list[dict]:
         return self._q("SELECT * FROM trade_forensics ORDER BY entry_ts_ms")
 
+    def optimize_tp_sl(self) -> dict:
+        """Analiza las últimas 50 operaciones y sugiere nuevos TP/SL."""
+        import statistics
+        rows = self._q("SELECT pnl_pct, exit_reason, outcome FROM trade_forensics "
+                       "WHERE status='closed' ORDER BY exit_ts_ms DESC LIMIT 50")
+        if len(rows) < 20:
+            return {"tp": None, "sl": None, "reason": "insufficient data"}
+
+        wins = [r["pnl_pct"] for r in rows if r["outcome"] == "win"]
+        losses = [abs(r["pnl_pct"]) for r in rows if r["outcome"] == "loss"]
+
+        if not wins or not losses:
+            return {"tp": None, "sl": None, "reason": "no trades"}
+
+        avg_win = statistics.mean(wins)
+        avg_loss = statistics.mean(losses)
+
+        new_tp = avg_win * 1.2
+        new_sl = avg_loss * 1.2
+
+        new_tp = max(15, min(50, round(new_tp, 1)))
+        new_sl = max(1.5, min(5, round(new_sl, 1)))
+
+        return {
+            "tp": new_tp,
+            "sl": new_sl,
+            "avg_win": round(avg_win, 1),
+            "avg_loss": round(avg_loss, 1),
+            "n_wins": len(wins),
+            "n_losses": len(losses),
+        }
+
     def close(self) -> None:
         with self._lock:
             try:

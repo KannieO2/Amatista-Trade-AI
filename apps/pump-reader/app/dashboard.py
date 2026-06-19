@@ -384,10 +384,10 @@ DASHBOARD_HTML = r"""<!doctype html>
 
       <div class="grid-2b">
         <div class="panel">
-          <div class="phead"><span class="pt">Live candidates</span><span class="px">live</span></div>
+          <div class="phead"><span class="pt">Candidatos pre-estallido</span><span class="px">FSM · antes del pump</span></div>
           <table>
-            <thead><tr><th>Score</th><th>Token</th><th>Cluster</th><th>Top20%</th><th>&Delta;24h</th><th>24h</th></tr></thead>
-            <tbody id="tbl-body"><tr><td colspan="6" class="empty">Scanning…</td></tr></tbody>
+            <thead><tr><th>Token</th><th>Estado</th><th>Acc</th><th>Pers</th><th>Rug</th><th>Conf</th></tr></thead>
+            <tbody id="tbl-body"><tr><td colspan="6" class="empty">Analizando acumulación…</td></tr></tbody>
           </table>
         </div>
         <div class="panel">
@@ -407,7 +407,7 @@ DASHBOARD_HTML = r"""<!doctype html>
 
     <!-- ============ TOKENS VIEW ============ -->
     <section class="view hidden" id="view-tokens">
-      <div class="vhead"><div><h1>Tokens</h1><p>All scanned candidates across every exchange · live</p></div><div class="ts mono" id="tok-ts">—</div></div>
+      <div class="vhead"><div><h1>Tokens</h1><p>Monitoreo de cada token escaneado · análisis, volumen, gráfico (clic en una fila)</p></div><div class="ts mono" id="tok-ts">—</div></div>
       <div class="panel">
         <div class="phead"><span class="pt">⚡ Live volume-acceleration watch</span><span class="px" id="vel-meta">—</span></div>
         <div id="vel-body"><div class="empty">No hot symbols being watched right now</div></div>
@@ -808,19 +808,17 @@ async function loadOverview(){
   $("equity-chart").innerHTML = equitySvg(d.equity_curve);
   wireEquityHover(d.equity_curve);
 
-  $("tbl-body").innerHTML = (d.table||[]).length ? d.table.map(r=>{
-    const sc = r.score>=70?"var(--pink)":r.score>=40?"var(--amber)":"var(--muted)";
-    const scBg = r.score>=70?"rgba(255,47,110,.14)":r.score>=40?"rgba(230,162,60,.14)":"rgba(255,255,255,.05)";
-    const up = r.delta_24h>=0;
+  const PP_STATE={entry:"var(--green)",confirmation:"var(--pink)",monitor:"var(--amber)",watchlist:"var(--muted)"};
+  const PP_LBL={entry:"ENTRY · comprado",confirmation:"confirmando",monitor:"analizando",watchlist:"en cola"};
+  $("tbl-body").innerHTML = (d.prepump||[]).length ? d.prepump.map(r=>{
+    const col=PP_STATE[r.state]||"var(--muted)";
     return `<tr style="cursor:pointer" onclick="openCandidate('${r.symbol}','${r.exchange}')">
-      <td><span class="scoreb mono" style="color:${sc};background:${scBg}">${r.score}</span></td>
       <td><span class="sym">${r.symbol}</span> <span class="px">${upx(r.exchange)}</span></td>
-      <td><span class="tag"><span class="cdot" style="background:${clusterColor(r.cluster)}"></span>${tcase(r.cluster)}</span></td>
-      <td><div class="bar"><div class="bt"><i style="width:${Math.min(r.top20,100)}%"></i></div><span class="mono px">${r.top20}%</span></div></td>
-      <td class="mono delta ${up?'up':'down'}">${up?'+':''}${r.delta_24h}%</td>
-      <td>${sparkSvg(r.spark)}</td>
+      <td><span class="px" style="color:${col};font-weight:600">${PP_LBL[r.state]||r.state}</span></td>`
+      +plScoreCell(r.acc,false)+plScoreCell(r.pers,false)+plScoreCell(r.rug,true)
+      +`<td class="mono">${r.confirm_count||0}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="6" class="empty">No candidates yet · run Update</td></tr>`;
+  }).join("") : `<tr><td colspan="6" class="empty">Sin candidatos en análisis · alimentando el detector…</td></tr>`;
 
   $("alerts-body").innerHTML = (d.latest_alerts||[]).length ? d.latest_alerts.map(a=>{
     return `<div class="alert" style="cursor:pointer" onclick="openCandidate('${a.symbol}','')">

@@ -215,3 +215,24 @@ class LearningLab:
 
     def snapshot(self) -> dict:
         return {**self.metrics(), "table": self.table()}
+
+    def optimize_timeout(self) -> dict:
+        """Sugiere un nuevo timeout basado en el lead time de los pumps."""
+        import statistics
+        confirmed = [o for o in self.outcomes if o.label == "confirmed_pump"]
+        if len(confirmed) < 10:
+            return {"timeout": None, "reason": "insufficient data"}
+
+        lead_times = [o.lead_secs() / 60 for o in confirmed]
+        avg_lead = statistics.mean(lead_times)
+        std_lead = statistics.stdev(lead_times) if len(lead_times) > 1 else 0
+
+        new_timeout = avg_lead + 2 * std_lead
+        new_timeout = max(5, min(30, round(new_timeout, 1)))
+
+        return {
+            "timeout": new_timeout,
+            "avg_lead": round(avg_lead, 1),
+            "std_lead": round(std_lead, 1),
+            "n_samples": len(confirmed),
+        }

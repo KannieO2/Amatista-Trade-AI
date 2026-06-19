@@ -36,7 +36,7 @@ from .scores import ScoreSet, evaluate
 logger = logging.getLogger("pump-reader.pipeline")
 
 # --- configuración (calibrable por env) ---------------------------------------
-FSM_MODE = os.getenv("PUMP_FSM_MODE", "shadow").lower()        # shadow | enforcing
+FSM_MODE = os.getenv("PUMP_FSM_MODE", "enforcing").lower()     # shadow | enforcing
 WINDOW_MIN = int(os.getenv("PUMP_FSM_WINDOW_MIN", "30"))       # ventana de scoring (min)
 MIN_ROWS = int(os.getenv("PUMP_FSM_MIN_ROWS", "8"))           # filas para WATCHLIST→MONITOR
 ACC_MIN = int(os.getenv("PUMP_FSM_ACC_MIN", "55"))           # umbral AccumulationScore
@@ -44,6 +44,11 @@ PERS_MIN = int(os.getenv("PUMP_FSM_PERS_MIN", "60"))         # umbral Persistenc
 RUG_MAX = int(os.getenv("PUMP_FSM_RUG_MAX", "40"))           # techo RugRiskScore
 CONFIRM_TICKS = int(os.getenv("PUMP_FSM_CONFIRM_TICKS", "3")) # ticks sostenidos → ENTRY
 EXPIRE_MIN = int(os.getenv("PUMP_FSM_EXPIRE_MIN", "120"))    # descarta si no confirma
+# Tras cuántos min se BORRA de la tabla de estado un token terminal (expired/
+# discard). NO toca decision_log (el historial/aprendizaje se conserva): solo
+# limpia el board para que los NO-candidatos no se acumulen, y permite que un
+# token re-entre al embudo si más tarde empieza a acumular de verdad.
+PRUNE_TERMINAL_MIN = int(os.getenv("PUMP_FSM_PRUNE_MIN", "60"))
 
 STATES = ("candidate", "watchlist", "monitor", "confirmation", "entry", "discard", "expired")
 
@@ -149,17 +154,21 @@ class Pipeline:
 
     # --- API ----------------------------------------------------------------
     def note_candidate(self, symbol: str, exchange: str) -> None:
-        """El scan vio este símbolo. Lo admite a la FSM si es nuevo."""
+        """El scan vio este símbolo. Lo admite a la FSM si es nuevo O si había
+        terminado (expired/discard) — un token que vuelve a aparecer y empieza a
+        acumular merece re-entrar al embudo, no quedar bloqueado para siempre."""
         symbol, exchange = self._key(symbol, exchange)
         cur = self._get(symbol, exchange)
-        if cur is None:
-            self._put(symbol, exchange, "watchlist", since=int(time.time() * 1000))
-            self._log(symbol, exchange, "candidate", "watchlist", "admit")
+        if cur is None or cur["state"] in ("expired", "discard"):
+            self._put(symbol, exchange, "watchlist", since=int(time.time() * 1000), confirm_count=0)
+            self._log(symbol, exchange, cur["state"] if cur else "candidate", "watchlist", "admit")
 
     def tick(self) -> list[EntryIntent]:
         """Un barrido de la FSM sobre todos los símbolos no terminales. Devuelve
         los intents de entrada (en enforcing main.py los ejecuta). Best-effort."""
         intents: list[EntryIntent] = []
+        # Limpia los NO-candidatos añejos antes de barrer (mantiene el board limpio).
+        self.prune_terminal()
         try:
             rows = self._all_active()
         except Exception:
@@ -208,9 +217,16 @@ class Pipeline:
                         continue
                     cc = (st["confirm_count"] or 0) + 1
                     if cc >= CONFIRM_TICKS:
-                        self._put(symbol, exchange, "entry", confirm_count=cc, s=s)
-                        self._log(symbol, exchange, "confirmation", "entry",
-                                  "confirmed" if self.mode == "enforcing" else "confirmed_shadow", s)
+                        if self.mode == "enforcing":
+                            # READY: emite el intent pero NO marca 'entry' todavía —
+                            # main.py ejecuta la compra y llama mark_entered SOLO si
+                            # hubo fill real (así 'entry' = comprado de verdad, no un
+                            # estado falso cuando el forensic/risk lo bloquea).
+                            self._put(symbol, exchange, "confirmation", confirm_count=cc, s=s)
+                            self._log(symbol, exchange, "confirmation", "confirmation", "ready_to_enter", s)
+                        else:
+                            self._put(symbol, exchange, "entry", confirm_count=cc, s=s)
+                            self._log(symbol, exchange, "confirmation", "entry", "confirmed_shadow", s)
                         intents.append(EntryIntent(symbol, exchange, s))
                     else:
                         self._put(symbol, exchange, "confirmation", confirm_count=cc, s=s)
@@ -222,9 +238,16 @@ class Pipeline:
         return intents
 
     def mark_entered(self, symbol: str, exchange: str) -> None:
-        """main.py confirma que ejecutó la entrada (enforcing). Reposa el estado."""
+        """main.py confirma que ejecutó la entrada (enforcing). Marca entry SIN
+        borrar los scores que la llevaron ahí (antes _put con s=None los ponía en
+        0 → la fila entry mostraba acc=0, ilegible)."""
         symbol, exchange = self._key(symbol, exchange)
-        self._put(symbol, exchange, "entry")
+        now = int(time.time() * 1000)
+        with self._lock:
+            self._conn.execute(
+                "UPDATE fsm_state SET state='entry', updated_at=? WHERE symbol=? AND exchange=?",
+                (now, symbol, exchange))
+            self._conn.commit()
 
     def _all_active(self) -> list[dict]:
         with self._lock:
@@ -242,9 +265,27 @@ class Pipeline:
             return {r[0]: r[1] for r in cur.fetchall()}
 
     def board(self, limit: int = 60) -> list[dict]:
+        """Solo CANDIDATOS VIVOS. Los terminales (expired/discard) no son
+        candidatos → fuera del board (su historial sigue en decision_log)."""
         return self._q("SELECT symbol,exchange,state,acc,pers,rug,seq,confirm_count,"
                        "since_ts_ms,last_eval_ts_ms FROM fsm_state "
+                       "WHERE state NOT IN ('expired','discard') "
                        "ORDER BY (acc+pers) DESC, rug ASC LIMIT ?", (limit,))
+
+    def prune_terminal(self, older_than_min: int = PRUNE_TERMINAL_MIN) -> int:
+        """Borra de fsm_state los NO-candidatos (expired/discard) ya añejos. NO
+        toca decision_log (historial/aprendizaje intacto). Best-effort."""
+        cutoff = int(time.time() * 1000) - older_than_min * 60_000
+        try:
+            with self._lock:
+                cur = self._conn.execute(
+                    "DELETE FROM fsm_state WHERE state IN ('expired','discard') AND updated_at < ?",
+                    (cutoff,))
+                self._conn.commit()
+                return cur.rowcount
+        except Exception:
+            logger.exception("prune_terminal failed")
+            return 0
 
     def recent_decisions(self, limit: int = 80) -> list[dict]:
         return self._q("SELECT ts_ms,symbol,exchange,from_state,to_state,action,acc,pers,rug,seq "

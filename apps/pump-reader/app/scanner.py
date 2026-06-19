@@ -35,6 +35,18 @@ MAX_QUOTE_VOLUME_USD = 60_000_000
 SHORTLIST_SIZE = 20
 DEEP_FETCH_CONCURRENCY = 5
 
+# Pre-pump (accumulation) feed. The momentum shortlist above is GAINERS-ONLY
+# (sorted by 24h % up), so the accumulation detector (scores.py / FSM) never sees
+# a token BEFORE it runs — it only ever scores tokens already pumping = late by
+# construction. This SECOND shortlist admits FLAT-but-liquid tokens (small 24h
+# move, real turnover) so the microstructure recorder + FSM can watch them
+# absorb/accumulate and fire BEFORE the breakout. Ranked by 24h quote volume
+# (real interest while the price is still quiet). This is what makes "detect
+# antes" possible; without it the bot is structurally a momentum chaser.
+ACCUM_MIN_CHG_PCT = float(os.getenv("PUMP_ACCUM_MIN_CHG_PCT", "-3"))
+ACCUM_MAX_CHG_PCT = float(os.getenv("PUMP_ACCUM_MAX_CHG_PCT", "12"))
+ACCUM_SHORTLIST_SIZE = int(os.getenv("PUMP_ACCUM_SHORTLIST_SIZE", "20"))
+
 # Liquidity is measured as resting notional within this band around mid price.
 DEPTH_BAND_PCT = 0.02
 LOW_LIQUIDITY_USD = 75_000
@@ -156,14 +168,17 @@ def _forensic_metrics(order_book: dict) -> tuple[float, float]:
 
 
 def forensic_check(*, spread_pct: float, liquidity_usd: float,
-                   top_book_share: float) -> tuple[bool, list[str]]:
+                   top_book_share: float,
+                   min_liquidity_usd: float | None = None) -> tuple[bool, list[str]]:
     """Pre-trade gate. Returns (ok_to_enter, reasons_if_blocked). Real, auditable,
-    CEX-sourced — no fabricated on-chain data."""
+    CEX-sourced — no fabricated on-chain data. min_liquidity_usd overrides the
+    default floor (pre-pump path uses a lower one — thinner accumulation books)."""
+    floor = FORENSIC_MIN_LIQUIDITY_USD if min_liquidity_usd is None else min_liquidity_usd
     reasons: list[str] = []
     if spread_pct > FORENSIC_MAX_SPREAD_PCT:
         reasons.append(f"spread {spread_pct:.2f}% > {FORENSIC_MAX_SPREAD_PCT}%")
-    if liquidity_usd < FORENSIC_MIN_LIQUIDITY_USD:
-        reasons.append(f"liquidity ${liquidity_usd:,.0f} < ${FORENSIC_MIN_LIQUIDITY_USD:,.0f}")
+    if liquidity_usd < floor:
+        reasons.append(f"liquidity ${liquidity_usd:,.0f} < ${floor:,.0f}")
     if top_book_share > FORENSIC_MAX_TOP_SHARE:
         reasons.append(f"book {top_book_share*100:.0f}% in top-3 levels (MANIPULATION_SUSPECT)")
     return (not reasons), reasons
@@ -364,7 +379,8 @@ async def scan_exchange(exchange_id: str, min_pump_score: int = 1) -> list[Scann
         await exchange.load_markets()
         tickers = await exchange.fetch_tickers()
 
-        shortlist: list[tuple[str, dict]] = []
+        gainers: list[tuple[str, dict]] = []
+        accumulation: list[tuple[str, dict]] = []
         for symbol, ticker in tickers.items():
             market = exchange.markets.get(symbol)
             if market is None or not _is_altcoin(market):
@@ -373,12 +389,22 @@ async def scan_exchange(exchange_id: str, min_pump_score: int = 1) -> list[Scann
             if not (MIN_QUOTE_VOLUME_USD <= quote_volume <= MAX_QUOTE_VOLUME_USD):
                 continue
             change = float(ticker.get("percentage") or 0.0)
-            if change <= 0:
-                continue
-            shortlist.append((symbol, ticker))
+            # Momentum path: already running (late by nature, but kept).
+            if change > 0:
+                gainers.append((symbol, ticker))
+            # Pre-pump path: still FLAT but with real turnover = accumulation
+            # candidate. The FSM decides over time if it's truly accumulating.
+            if ACCUM_MIN_CHG_PCT <= change <= ACCUM_MAX_CHG_PCT:
+                accumulation.append((symbol, ticker))
 
-        shortlist.sort(key=lambda item: float(item[1].get("percentage") or 0.0), reverse=True)
-        shortlist = shortlist[:SHORTLIST_SIZE]
+        gainers.sort(key=lambda item: float(item[1].get("percentage") or 0.0), reverse=True)
+        accumulation.sort(key=lambda item: float(item[1].get("quoteVolume") or 0.0), reverse=True)
+
+        # Merge both shortlists, dedup (a small gainer can be in both).
+        merged: dict[str, dict] = {}
+        for symbol, ticker in gainers[:SHORTLIST_SIZE] + accumulation[:ACCUM_SHORTLIST_SIZE]:
+            merged.setdefault(symbol, ticker)
+        shortlist = list(merged.items())
 
         semaphore = asyncio.Semaphore(DEEP_FETCH_CONCURRENCY)
         results = await asyncio.gather(
