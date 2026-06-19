@@ -141,6 +141,8 @@ DASHBOARD_HTML = r"""<!doctype html>
 
   .grid-kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
   .grid-2{display:grid;grid-template-columns:1fr 1.32fr;gap:14px}
+  .grid-2e{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:1100px){.grid-2e{grid-template-columns:1fr}}
   .grid-2b{display:grid;grid-template-columns:1.5fr 1fr;gap:14px}
   @media(max-width:1100px){.grid-kpi{grid-template-columns:repeat(2,1fr)}.grid-2,.grid-2b{grid-template-columns:1fr}}
   /* ---- mobile / phone (matches the responsive grid bot) ---- */
@@ -412,6 +414,11 @@ DASHBOARD_HTML = r"""<!doctype html>
         </div>
       </div>
 
+      <div class="panel">
+        <div class="phead"><span class="pt">Alertas · Próximas a subir</span><span class="px">Donde el bot invierte</span></div>
+        <div id="alerts-body"><div class="empty">Sin alertas todavía</div></div>
+      </div>
+
       <div class="grid-2">
         <div class="panel">
           <div class="phead"><span class="pt">Cluster split</span><span class="px">last 24h</span></div>
@@ -436,24 +443,20 @@ DASHBOARD_HTML = r"""<!doctype html>
         </div>
       </div>
 
-      <div class="grid-3">
+      <div class="grid-2e">
         <div class="panel">
           <div class="phead"><span class="pt">Candidatos pre-estallido</span><span class="px" id="pp-count">FSM · antes del pump</span></div>
           <table class="fitbl">
-            <thead><tr><th style="width:40%">Token</th><th style="width:28%">Estado</th><th style="width:11%">Acc</th><th style="width:11%">Pers</th><th style="width:10%">Rug</th></tr></thead>
+            <thead><tr><th style="width:46%">Token</th><th style="width:24%">Estado</th><th style="width:10%">Acc</th><th style="width:10%">Pers</th><th style="width:10%">Rug</th></tr></thead>
             <tbody id="pp-body"><tr><td colspan="5" class="empty">Analizando acumulación…</td></tr></tbody>
           </table>
         </div>
         <div class="panel">
           <div class="phead"><span class="pt">Mercado · Live</span><span class="px">Gainers / Momentum</span></div>
           <table class="fitbl">
-            <thead><tr><th style="width:16%">Score</th><th style="width:42%">Token</th><th style="width:22%">Cluster</th><th style="width:20%">&Delta;24h</th></tr></thead>
-            <tbody id="tbl-body"><tr><td colspan="4" class="empty">Escaneando…</td></tr></tbody>
+            <thead><tr><th style="width:14%">Score</th><th style="width:32%">Token</th><th style="width:20%">Cluster</th><th style="width:16%">&Delta;24h</th><th style="width:18%">Chart</th></tr></thead>
+            <tbody id="tbl-body"><tr><td colspan="5" class="empty">Escaneando…</td></tr></tbody>
           </table>
-        </div>
-        <div class="panel">
-          <div class="phead"><span class="pt">Alertas · Próximas a subir</span><span class="px">Donde el bot invierte</span></div>
-          <div id="alerts-body"><div class="empty">Sin alertas todavía</div></div>
         </div>
       </div>
     </section>
@@ -904,8 +907,9 @@ async function loadOverview(){
       <td><span class="sym">${r.symbol}</span> <span class="px">${upx(r.exchange)}</span></td>
       <td><span class="tag"><span class="cdot" style="background:${clusterColor(r.cluster)}"></span>${tcase(r.cluster)}</span></td>
       <td class="mono delta ${up?'up':'down'}">${up?'+':''}${r.delta_24h}%</td>
+      <td>${sparkSvg(r.spark)}</td>
     </tr>`;
-  }).join("") : `<tr><td colspan="4" class="empty">No candidates yet · run Update</td></tr>`;
+  }).join("") : `<tr><td colspan="5" class="empty">No candidates yet · run Update</td></tr>`;
 
   $("alerts-body").innerHTML = (d.latest_alerts||[]).length ? d.latest_alerts.map(a=>{
     return `<div class="alert" style="cursor:pointer" onclick="openCandidate('${a.symbol}','')">
