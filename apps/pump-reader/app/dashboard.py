@@ -300,8 +300,8 @@ DASHBOARD_HTML = r"""<!doctype html>
   .mfoot{display:flex;justify-content:flex-end;gap:10px;padding:14px 18px;border-top:1px solid var(--border-soft)}
   /* FSM state chip (entry/confirmation/monitor/watchlist) */
   .schip{display:inline-block;padding:3px 10px;border-radius:999px;font-size:10.5px;font-weight:700;letter-spacing:.05em;line-height:1.3;white-space:nowrap}
-  /* Everything on the page in UPPERCASE (per spec). Display-only; values unchanged. */
-  body{text-transform:uppercase}
+  /* First letter of each word capitalized (display-only; values unchanged). */
+  body{text-transform:capitalize}
   .btn{border:1px solid var(--border);background:var(--panel);color:var(--text);padding:9px 16px;border-radius:9px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:transform .12s ease}
   .btn:active{transform:translateY(1px)}
   .btn.primary{background:var(--pink);border-color:var(--pink);color:#fff}

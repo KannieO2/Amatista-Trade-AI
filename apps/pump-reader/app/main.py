@@ -798,18 +798,24 @@ def _apply_learning(quality: str, pnl: float) -> None:
 
 
 async def _optimize_tp_sl() -> None:
-    """Optimiza TP/SL basado en forensics cada 24h."""
+    """Optimiza el Trailing Stop (PUMP_DYNAMIC_STOP_PCT) y el Hard Stop
+    (PUMP_STOP_LOSS_PCT) cada 24h a partir del forensics. Ya NO ajusta un
+    take-profit fijo: el motor sale por trailing dinámico sobre el pico, así que
+    el optimizador afina la distancia de giveback en vez de un TP que nadie usa."""
     global _forensics
     if _forensics is None:
         return
     try:
         opt = await asyncio.to_thread(_forensics.optimize_tp_sl)
-        if opt.get("tp") and opt.get("sl"):
-            os.environ["PUMP_TAKE_PROFIT_PCT"] = str(opt["tp"])
+        if opt.get("sl") and opt.get("avg_loss") is not None:
+            # Trailing ~1.5x la pérdida típica: no te sacude el ruido normal pero
+            # banca la corrida antes del round-trip. Clamp a una banda sana [3,10].
+            trail = max(3.0, min(10.0, round(opt["avg_loss"] * 1.5, 1)))
+            os.environ["PUMP_DYNAMIC_STOP_PCT"] = str(trail)
             os.environ["PUMP_STOP_LOSS_PCT"] = str(opt["sl"])
-            logger.info(f"✅ TP/SL optimizado: TP={opt['tp']}%, SL={opt['sl']}% | Avg Win: {opt['avg_win']:.1f}%, Avg Loss: {opt['avg_loss']:.1f}%")
+            logger.info(f"✅ Trailing/Hard optimizado: Trailing={trail}%, HardStop={opt['sl']}% | Avg Win: {opt['avg_win']:.1f}%, Avg Loss: {opt['avg_loss']:.1f}%")
     except Exception:
-        logger.exception("TP/SL optimization failed")
+        logger.exception("Trailing/SL optimization failed")
 
 
 async def _optimize_timeout() -> None:
