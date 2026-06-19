@@ -143,6 +143,16 @@ DASHBOARD_HTML = r"""<!doctype html>
   .grid-2{display:grid;grid-template-columns:1fr 1.32fr;gap:14px}
   .grid-2e{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   @media(max-width:1100px){.grid-2e{grid-template-columns:1fr}}
+  /* KPIs in ONE box (4 flat cells, thin dividers) + a small Alerts box beside it. */
+  .kpirow{display:grid;grid-template-columns:2.7fr 1fr;gap:14px}
+  @media(max-width:1100px){.kpirow{grid-template-columns:1fr}}
+  .kpibox{padding:6px 4px}
+  .kpi4{display:grid;grid-template-columns:repeat(4,1fr)}
+  @media(max-width:680px){.kpi4{grid-template-columns:1fr 1fr;row-gap:6px}}
+  .kcell{background:none;border:0;box-shadow:none;border-radius:0;padding:8px 16px}
+  .kpi4 .kcell + .kcell{border-left:1px solid var(--border-soft)}
+  .kpibox .kval{font-size:26px;margin-top:6px}
+  .alertsbox #alerts-body{max-height:220px;overflow-y:auto}
   .grid-2b{display:grid;grid-template-columns:1.5fr 1fr;gap:14px}
   @media(max-width:1100px){.grid-kpi{grid-template-columns:repeat(2,1fr)}.grid-2,.grid-2b{grid-template-columns:1fr}}
   /* ---- mobile / phone (matches the responsive grid bot) ---- */
@@ -391,32 +401,35 @@ DASHBOARD_HTML = r"""<!doctype html>
         <div class="ts mono" id="pump-ts">—</div>
       </div>
 
-      <div class="grid-kpi">
-        <div class="card">
-          <div class="klabel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>Tokens monitored</div>
-          <div class="kval mono" id="k-monitored">—</div>
-          <div class="ksub" id="k-exchanges">—</div>
+      <div class="kpirow">
+        <div class="panel kpibox">
+          <div class="kpi4">
+            <div class="card kcell">
+              <div class="klabel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>Tokens monitored</div>
+              <div class="kval mono" id="k-monitored">—</div>
+              <div class="ksub" id="k-exchanges">—</div>
+            </div>
+            <div class="card kcell">
+              <div class="klabel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.5 7H22l-6 4.5L18 22l-6-4.5L6 22l2-8.5L2 9h7.5z"/></svg>Score max · live</div>
+              <div class="kval pink mono" id="k-scoremax">—</div>
+              <div class="ksub" id="k-scoremax-sub">—</div>
+            </div>
+            <div class="card kcell">
+              <div class="klabel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0112 0c0 7 3 7 3 7H3s3 0 3-7"/></svg>Alerts · 24h</div>
+              <div class="kval mono" id="k-alerts">—</div>
+              <div class="ksub" id="k-alerts-sub">—</div>
+            </div>
+            <div class="card kcell">
+              <div class="klabel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 7-8"/></svg>Open positions</div>
+              <div class="kval mono" id="k-positions">—</div>
+              <div class="ksub" id="k-positions-sub">executor armed</div>
+            </div>
+          </div>
         </div>
-        <div class="card">
-          <div class="klabel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.5 7H22l-6 4.5L18 22l-6-4.5L6 22l2-8.5L2 9h7.5z"/></svg>Score max · live</div>
-          <div class="kval pink mono" id="k-scoremax">—</div>
-          <div class="ksub" id="k-scoremax-sub">—</div>
+        <div class="panel alertsbox">
+          <div class="phead"><span class="pt">Alertas</span><span class="px">Próximas a subir</span></div>
+          <div id="alerts-body"><div class="empty">Sin alertas todavía</div></div>
         </div>
-        <div class="card">
-          <div class="klabel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0112 0c0 7 3 7 3 7H3s3 0 3-7"/></svg>Alerts · 24h</div>
-          <div class="kval mono" id="k-alerts">—</div>
-          <div class="ksub" id="k-alerts-sub">—</div>
-        </div>
-        <div class="card">
-          <div class="klabel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 7-8"/></svg>Open positions</div>
-          <div class="kval mono" id="k-positions">—</div>
-          <div class="ksub" id="k-positions-sub">executor armed</div>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="phead"><span class="pt">Alertas · Próximas a subir</span><span class="px">Donde el bot invierte</span></div>
-        <div id="alerts-body"><div class="empty">Sin alertas todavía</div></div>
       </div>
 
       <div class="grid-2">
