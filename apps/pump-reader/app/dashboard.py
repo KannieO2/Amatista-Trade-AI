@@ -288,14 +288,20 @@ DASHBOARD_HTML = r"""<!doctype html>
   .exbox .top b{font-weight:600}
   .exbox .top .bal{color:var(--muted);font-size:11px}
   .exbox .row{display:flex;align-items:center;gap:12px}
-  .exbox input[type=range]{flex:1;accent-color:var(--pink);height:4px}
-  .exbox .pct{width:46px;text-align:right;font-family:"Geist Mono",monospace;font-weight:600}
+  .exbox input[type=range]{flex:1;-webkit-appearance:none;appearance:none;height:7px;border-radius:999px;background:var(--border);outline:none;cursor:pointer}
+  .exbox input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:17px;height:17px;border-radius:50%;background:#fff;border:4px solid var(--pink);box-shadow:0 2px 7px -1px rgba(0,0,0,.6);cursor:pointer}
+  .exbox input[type=range]::-moz-range-thumb{width:17px;height:17px;border-radius:50%;background:#fff;border:4px solid var(--pink);box-shadow:0 2px 7px -1px rgba(0,0,0,.6);cursor:pointer}
+  .exbox .pct{min-width:54px;text-align:center;font-family:"Geist Mono",monospace;font-weight:700;color:var(--pink);background:rgba(160,92,242,.14);border-radius:8px;padding:5px 0}
   .exbox .cap{color:var(--muted);font-size:10.5px;margin-top:7px}
   .exbox .cap .ok{color:var(--green)}
   .sumbar{display:flex;justify-content:space-between;align-items:center;background:var(--inset);border-radius:9px;padding:11px 13px;font-size:12px}
   .sumbar .v{font-family:"Geist Mono",monospace;font-weight:600}
   .sumbar .ok{color:var(--green)} .sumbar .bad{color:var(--red)}
   .mfoot{display:flex;justify-content:flex-end;gap:10px;padding:14px 18px;border-top:1px solid var(--border-soft)}
+  /* FSM state chip (entry/confirmation/monitor/watchlist) */
+  .schip{display:inline-block;padding:3px 10px;border-radius:999px;font-size:10.5px;font-weight:700;letter-spacing:.05em;line-height:1.3;white-space:nowrap}
+  /* Everything on the page in UPPERCASE (per spec). Display-only; values unchanged. */
+  body{text-transform:uppercase}
   .btn{border:1px solid var(--border);background:var(--panel);color:var(--text);padding:9px 16px;border-radius:9px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:transform .12s ease}
   .btn:active{transform:translateY(1px)}
   .btn.primary{background:var(--pink);border-color:var(--pink);color:#fff}
@@ -898,14 +904,11 @@ async function loadOverview(){
   wireEquityHover(d.equity_curve);
 
   // Pre-pump (FSM) section: the EARLY candidates the bot actually buys.
-  const PP_STATE={entry:"var(--green)",confirmation:"var(--pink)",monitor:"var(--amber)",watchlist:"var(--muted)"};
-  const PP_LBL={entry:"Comprado",confirmation:"Confirmando",monitor:"Analizando",watchlist:"En cola"};
   const pp=(d.prepump||[]);
   $("pp-body").innerHTML = pp.length ? pp.map(r=>{
-    const col=PP_STATE[r.state]||"var(--muted)";
     return `<tr style="cursor:pointer" onclick="openCandidate('${r.symbol}','${r.exchange}')">
       <td><span class="sym">${r.symbol}</span> <span class="px">${upx(r.exchange)}</span></td>
-      <td><span class="px" style="color:${col};font-weight:600">${(PP_LBL[r.state]||r.state).toUpperCase()}</span></td>`
+      <td>${stateChip(r.state)}</td>`
       +plScoreCell(r.acc,false)+plScoreCell(r.pers,false)+plScoreCell(r.rug,true)+`</tr>`;
   }).join("") : `<tr><td colspan="5" class="empty">Analizando acumulación… alimentando el detector</td></tr>`;
   const ppHot=pp.filter(r=>r.state==='entry'||r.state==='confirmation').length;
@@ -942,6 +945,15 @@ function moneyC(n){n=Number(n)||0;const a=Math.abs(n),s=n<0?"-":"";
   if(a>=1e6)return s+"$"+(a/1e6).toFixed(2)+"M";
   if(a>=1e3)return s+"$"+(a/1e3).toFixed(1)+"K";
   return s+"$"+a.toFixed(a<1?6:2);}
+// FSM state -> [textColor, bgTint]. Shared by the pre-pump board, pipeline board
+// and decision log so every state reads as the same colored chip, uppercase.
+const STATE_C={entry:["var(--green)","rgba(47,208,138,.15)"],confirmation:["var(--pink)","rgba(160,92,242,.16)"],
+  monitor:["var(--amber)","rgba(230,162,60,.16)"],watchlist:["var(--muted)","rgba(255,255,255,.06)"]};
+function stateChip(s){const c=STATE_C[(s||"").toLowerCase()]||["var(--muted)","rgba(255,255,255,.06)"];
+  return `<span class="schip" style="color:${c[0]};background:${c[1]}">${(s||"—").toUpperCase()}</span>`;}
+// Paint the filled portion of a range slider up to its value (native track is flat gray).
+function fillRange(el){const v=Math.max(0,Math.min(100,Number(el.value)||0));
+  el.style.background=`linear-gradient(90deg,var(--pink) ${v}%,var(--border) ${v}%)`;}
 async function loadGrvt(){
   // The real GRVTBot renders itself inside the iframe (#grvt-frame), served
   // same-origin through the /grid/* reverse proxy. Nothing to render here — we
@@ -994,8 +1006,9 @@ function syncAlloc(){
   const total=Number($("alloc-total").value)||0;
   const m=Number($("r-mexc").value), b=Number($("r-bitget").value);
   $("p-mexc").textContent=m+"%"; $("p-bitget").textContent=b+"%";
-  $("bal-mexc").textContent=fmtK(total*m/100); $("cap-mexc").textContent=fmtK(total*m/100);
-  $("bal-bitget").textContent="$"+(total*b/100).toFixed(2); $("cap-bitget").textContent="$"+(total*b/100).toFixed(2);
+  fillRange($("r-mexc")); fillRange($("r-bitget"));
+  $("bal-mexc").textContent=money(total*m/100); $("cap-mexc").textContent=money(total*m/100);
+  $("bal-bitget").textContent=money(total*b/100); $("cap-bitget").textContent=money(total*b/100);
   const sum=m+b;
   $("sum-val").textContent=sum.toFixed(1)+"%";
   const ok=Math.abs(sum-100)<0.01;
@@ -1210,12 +1223,12 @@ async function loadPipeline(){
   const dec=(d.rows||[]); $("pl-dec-count").textContent=dec.length;
   $("pl-decisions").innerHTML=dec.length ? dec.map(r=>
     `<tr><td class="mono px">${new Date(r.ts_ms).toLocaleTimeString()}</td><td class="sym">${r.symbol} <span class="px">${upx(r.exchange)}</span></td>
-     <td class="px">${r.from_state}&rarr;${r.to_state}</td><td><span class="px">${r.action}</span></td>
+     <td>${stateChip(r.from_state)}&rarr;${stateChip(r.to_state)}</td><td><span class="px">${r.action}</span></td>
      <td class="mono">${r.acc==null?'—':r.acc}</td><td class="mono">${r.pers==null?'—':r.pers}</td><td class="mono">${r.rug==null?'—':r.rug}</td></tr>`
   ).join("") : `<tr><td colspan="7" class="empty">Sin decisiones todavía</td></tr>`;
   const rows=(b.rows||[]); $("pl-board-count").textContent=rows.length+" símbolos";
   $("pl-board").innerHTML=rows.length ? rows.map(r=>
-    `<tr><td class="sym">${r.symbol}</td><td class="px">${upx(r.exchange)}</td><td><span class="px">${r.state}</span></td>`
+    `<tr><td class="sym">${r.symbol}</td><td class="px">${upx(r.exchange)}</td><td>${stateChip(r.state)}</td>`
     +plScoreCell(r.acc,false)+plScoreCell(r.pers,false)+plScoreCell(r.rug,true)
     +`<td class="mono px">${r.seq}</td><td class="mono">${r.confirm_count||0}</td></tr>`
   ).join("") : `<tr><td colspan="8" class="empty">Ningún símbolo observado aún · alimenta el scan</td></tr>`;
