@@ -102,6 +102,12 @@ class ManagedPosition:
     dynamic_stop: float = 0.0     # trailing stop off the peak (full position, ratchets up only)
     peak_volume: float = 0.0      # max 1m volume seen during the trade (fuel gauge)
     last_volume: float = 0.0      # latest 1m volume (vs peak → alive / faded)
+    # --- telemetry only (never affect exit decisions) ---
+    signal_at: datetime | None = None   # when the signal that triggered entry fired
+    be_at: datetime | None = None       # when break-even armed
+    trail_at: datetime | None = None    # when the trailing stop first armed
+    exit_source: str = ""               # price source at the tick that triggered the exit
+    exit_price_age_ms: float | None = None  # WS price age at the exit tick (ms)
 
 
 @dataclass
@@ -131,7 +137,7 @@ class PositionManager:
 
     def open(self, *, symbol: str, exchange: str, entry_price: float, qty: float,
              pump_score: int = 0, classification: str = "n/a", cluster: str = "n/a",
-             now: datetime | None = None) -> None:
+             signal_at: datetime | None = None, now: datetime | None = None) -> None:
         if entry_price <= 0 or qty <= 0:
             return
         now = now or datetime.now(UTC)
@@ -139,7 +145,7 @@ class PositionManager:
             symbol=symbol, exchange=exchange, entry_price=entry_price, qty=qty,
             initial_qty=qty, entry_at=now, peak_price=entry_price, peak_at=now,
             last_price=entry_price, pump_score=pump_score, classification=classification,
-            cluster=cluster,
+            cluster=cluster, signal_at=signal_at,
         )
 
     def step(self, key: str, price: float, volume: float | None = None,
@@ -181,6 +187,7 @@ class PositionManager:
         if not pos.be_armed and gain >= BREAKEVEN_PCT:
             pos.be_armed = True
             pos.be_stop = pos.entry_price * (1 + BREAKEVEN_MARGIN_PCT / 100)
+            pos.be_at = now
         if pos.be_armed and price <= pos.be_stop:
             events.append(self._sell(pos, price, 1.0, "break_even"))
             return events
@@ -191,6 +198,8 @@ class PositionManager:
         if price > pos.entry_price:
             new_stop = pos.peak_price * (1 - p["dynamic_stop_pct"] / 100)
             if new_stop > pos.dynamic_stop:
+                if pos.dynamic_stop == 0 and pos.trail_at is None:
+                    pos.trail_at = now
                 pos.dynamic_stop = new_stop
         if pos.dynamic_stop > 0 and price <= pos.dynamic_stop:
             events.append(self._sell(pos, price, 1.0, "trailing"))

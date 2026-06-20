@@ -46,6 +46,28 @@ DEEP_FETCH_CONCURRENCY = 5
 ACCUM_MIN_CHG_PCT = float(os.getenv("PUMP_ACCUM_MIN_CHG_PCT", "-3"))
 ACCUM_MAX_CHG_PCT = float(os.getenv("PUMP_ACCUM_MAX_CHG_PCT", "12"))
 ACCUM_SHORTLIST_SIZE = int(os.getenv("PUMP_ACCUM_SHORTLIST_SIZE", "20"))
+# Freshness: the accumulation list above is ranked by ABSOLUTE 24h volume, so the
+# same high-turnover names top it every scan → the FSM keeps watching the same
+# tokens ("se queda en los mismos"). This rotating window walks DEEPER into the
+# eligible pool each scan so fresh, less-obvious names enter the detector over
+# time WITHOUT losing the stable volume-ranked core (continuity for the FSM,
+# which needs to watch a token across several scans to judge accumulation).
+ACCUM_EXPLORE_SIZE = int(os.getenv("PUMP_ACCUM_EXPLORE_SIZE", "12"))
+GAINERS_EXPLORE_SIZE = int(os.getenv("PUMP_GAINERS_EXPLORE_SIZE", "6"))
+_EXPLORE_CURSOR: dict[str, int] = {}  # per-exchange rotating offset into the deep pool
+
+
+def _rotating_slice(pool: list, cursor_key: str, size: int) -> list:
+    """Return a `size`-long wrap-around window into `pool`, advancing a per-key
+    cursor so successive scans surface different (fresh) tokens. Empty pool or
+    size<=0 → []. Continuity is preserved by callers keeping a fixed core."""
+    if not pool or size <= 0:
+        return []
+    n = len(pool)
+    start = _EXPLORE_CURSOR.get(cursor_key, 0) % n
+    window = (pool + pool)[start:start + size]
+    _EXPLORE_CURSOR[cursor_key] = (start + size) % n
+    return window
 
 # Liquidity is measured as resting notional within this band around mid price.
 DEPTH_BAND_PCT = 0.02
@@ -138,8 +160,10 @@ def _orderbook_metrics(order_book: dict) -> tuple[float, float]:
     low = mid * (1 - DEPTH_BAND_PCT)
     high = mid * (1 + DEPTH_BAND_PCT)
 
-    bid_notional = sum(price * amount for price, amount in bids if price >= low)
-    ask_notional = sum(price * amount for price, amount in asks if price <= high)
+    # okx (and some venues) return >2 fields per level ([price, amount, ...]);
+    # index instead of 2-tuple unpack so those exchanges don't blow up the scan.
+    bid_notional = sum(lv[0] * lv[1] for lv in bids if lv[0] >= low)
+    ask_notional = sum(lv[0] * lv[1] for lv in asks if lv[0] <= high)
     total = bid_notional + ask_notional
     imbalance = bid_notional / total if total > 0 else 0.5
     return imbalance, total
@@ -160,7 +184,7 @@ def _forensic_metrics(order_book: dict) -> tuple[float, float]:
     best_bid = bids[0][0]
     best_ask = asks[0][0]
     spread_pct = (best_ask - best_bid) / best_ask * 100 if best_ask > 0 else 100.0
-    bid_notional = [p * a for p, a in bids]
+    bid_notional = [lv[0] * lv[1] for lv in bids]
     total_bid = sum(bid_notional)
     top3 = sum(sorted(bid_notional, reverse=True)[:3])
     top_share = top3 / total_bid if total_bid > 0 else 1.0
@@ -376,14 +400,18 @@ async def _deep_scan_symbol(
 # Exchanges allowed for public scanning (no API keys needed). These are where
 # the cheap microcap "scam pump" tokens actually trade — Binance lists few of
 # them, which is why the source tool leans on MEXC/Bitget.
-SUPPORTED_EXCHANGES = ("binance", "mexc", "bitget")
+SUPPORTED_EXCHANGES = ("binance", "bitget", "mexc", "okx")
 
 
 async def scan_exchange(exchange_id: str, min_pump_score: int = 1) -> list[ScannedCandidate]:
     """Scan one exchange: rank gainers, deep-fetch the shortlist, score by rules."""
     if not hasattr(ccxt, exchange_id):
         return []
-    exchange = getattr(ccxt, exchange_id)({"enableRateLimit": True})
+    # defaultType=spot: we hunt spot pumps. Some venues (bybit) default
+    # fetch_tickers to linear/perp, whose symbols don't map to spot markets →
+    # the altcoin filter rejected everything. Forcing spot fixes that with no
+    # effect on venues that already default to spot.
+    exchange = getattr(ccxt, exchange_id)({"enableRateLimit": True, "options": {"defaultType": "spot"}})
     try:
         await exchange.load_markets()
         tickers = await exchange.fetch_tickers()
@@ -409,22 +437,38 @@ async def scan_exchange(exchange_id: str, min_pump_score: int = 1) -> list[Scann
         gainers.sort(key=lambda item: float(item[1].get("percentage") or 0.0), reverse=True)
         accumulation.sort(key=lambda item: float(item[1].get("quoteVolume") or 0.0), reverse=True)
 
-        # Merge both shortlists, dedup (a small gainer can be in both).
+        # Stable core (continuity) + rotating explore window (freshness). The
+        # explore window walks past the top-N each scan so the FSM gets fed new
+        # names over time instead of re-watching the same high-volume tokens.
+        accum_core = accumulation[:ACCUM_SHORTLIST_SIZE]
+        accum_explore = _rotating_slice(
+            accumulation[ACCUM_SHORTLIST_SIZE:], f"{exchange_id}:accum", ACCUM_EXPLORE_SIZE)
+        gain_core = gainers[:SHORTLIST_SIZE]
+        gain_explore = _rotating_slice(
+            gainers[SHORTLIST_SIZE:], f"{exchange_id}:gain", GAINERS_EXPLORE_SIZE)
+
+        # Merge all shortlists, dedup (a small gainer can be in both).
         merged: dict[str, dict] = {}
-        for symbol, ticker in gainers[:SHORTLIST_SIZE] + accumulation[:ACCUM_SHORTLIST_SIZE]:
+        for symbol, ticker in gain_core + accum_core + accum_explore + gain_explore:
             merged.setdefault(symbol, ticker)
         shortlist = list(merged.items())
 
         semaphore = asyncio.Semaphore(DEEP_FETCH_CONCURRENCY)
+        # return_exceptions=True: a single symbol's failure (rate-limit, bad
+        # candle, one strict venue) must NOT discard every candidate from this
+        # exchange. Without it, one raised task aborted the whole gather → strict
+        # venues like okx silently returned 0 while lenient mexc survived.
         results = await asyncio.gather(
-            *(_deep_scan_symbol(exchange, exchange_id, symbol, ticker, semaphore) for symbol, ticker in shortlist)
+            *(_deep_scan_symbol(exchange, exchange_id, symbol, ticker, semaphore) for symbol, ticker in shortlist),
+            return_exceptions=True,
         )
     except Exception:
         return []
     finally:
         await exchange.close()
 
-    return [c for c in results if c is not None and c.pump_score >= min_pump_score]
+    return [c for c in results
+            if isinstance(c, ScannedCandidate) and c.pump_score >= min_pump_score]
 
 
 async def fetch_token_detail(
@@ -437,7 +481,11 @@ async def fetch_token_detail(
     """
     if not hasattr(ccxt, exchange_id):
         return None
-    exchange = getattr(ccxt, exchange_id)({"enableRateLimit": True})
+    # defaultType=spot: we hunt spot pumps. Some venues (bybit) default
+    # fetch_tickers to linear/perp, whose symbols don't map to spot markets →
+    # the altcoin filter rejected everything. Forcing spot fixes that with no
+    # effect on venues that already default to spot.
+    exchange = getattr(ccxt, exchange_id)({"enableRateLimit": True, "options": {"defaultType": "spot"}})
     try:
         ohlcv = await exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
         order_book = await exchange.fetch_order_book(symbol, limit=20)
@@ -455,8 +503,8 @@ async def fetch_token_detail(
     ]
     imbalance, liquidity = _orderbook_metrics(order_book)
     spike = _volume_spike(ohlcv)
-    bids = [[float(p), float(a)] for p, a in (order_book.get("bids") or [])[:15]]
-    asks = [[float(p), float(a)] for p, a in (order_book.get("asks") or [])[:15]]
+    bids = [[float(lv[0]), float(lv[1])] for lv in (order_book.get("bids") or [])[:15]]
+    asks = [[float(lv[0]), float(lv[1])] for lv in (order_book.get("asks") or [])[:15]]
     return {
         "symbol": symbol,
         "exchange": exchange_id,

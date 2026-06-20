@@ -69,10 +69,73 @@ class Outcome:
             return 0.0
         return max(0.0, (self.peak_at - self.alert_at).total_seconds())
 
+    # --- persistence round-trip (one row per outcome) ------------------------
+    def to_row(self) -> dict:
+        return {
+            "id": self.id, "symbol": self.symbol, "exchange": self.exchange,
+            "source": self.source, "alert_at": self.alert_at.isoformat(),
+            "alert_price": self.alert_price, "pump_score": self.pump_score,
+            "cluster": self.cluster, "classification": self.classification,
+            "signals": self.signals, "peak_price": self.peak_price,
+            "peak_at": self.peak_at.isoformat() if self.peak_at else None,
+            "peak_24h": self.peak_24h, "low_price": self.low_price,
+            "last_price": self.last_price, "settled": bool(self.settled), "label": self.label,
+        }
+
+    @classmethod
+    def from_row(cls, r: dict) -> "Outcome":
+        def _dt(v):
+            return datetime.fromisoformat(v) if v else None
+        sig = r.get("signals")
+        if isinstance(sig, str):
+            import json
+            try:
+                sig = json.loads(sig)
+            except Exception:
+                sig = {}
+        return cls(
+            symbol=r.get("symbol", ""), exchange=r.get("exchange", ""),
+            source=r.get("source", "alert"),
+            alert_at=_dt(r.get("alert_at")) or datetime.now(UTC),
+            alert_price=float(r.get("alert_price") or 0.0),
+            pump_score=int(r.get("pump_score") or 0),
+            cluster=r.get("cluster") or "long_pump",
+            classification=r.get("classification") or "n/a",
+            signals=sig or {}, peak_price=float(r.get("peak_price") or 0.0),
+            peak_at=_dt(r.get("peak_at")), peak_24h=float(r.get("peak_24h") or 0.0),
+            low_price=float(r.get("low_price") or 0.0),
+            last_price=float(r.get("last_price") or 0.0),
+            settled=bool(r.get("settled")), label=r.get("label") or "pending",
+            id=r.get("id") or str(uuid4()),
+        )
+
 
 class LearningLab:
     def __init__(self) -> None:
         self.outcomes: list[Outcome] = []
+
+    # --- persistence (so MFE/MAE/lead-time accumulate across restarts) --------
+    def export_rows(self) -> list[dict]:
+        """All outcomes as DB rows (for periodic upsert by main.py)."""
+        return [o.to_row() for o in self.outcomes]
+
+    def load_rows(self, rows: list[dict]) -> int:
+        """Rebuild outcomes from persisted rows at startup. Replaces in-memory
+        state (deduped by id, newest 500 kept)."""
+        loaded: list[Outcome] = []
+        seen: set[str] = set()
+        for r in rows or []:
+            try:
+                o = Outcome.from_row(r)
+            except Exception:
+                continue
+            if o.id in seen:
+                continue
+            seen.add(o.id)
+            loaded.append(o)
+        loaded.sort(key=lambda o: o.alert_at)
+        self.outcomes = loaded[-500:]
+        return len(self.outcomes)
 
     # --- recording -----------------------------------------------------------
     def record_alert(self, *, symbol: str, exchange: str, alert_price: float,

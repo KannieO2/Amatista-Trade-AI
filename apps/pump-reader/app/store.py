@@ -16,6 +16,7 @@ See infrastructure/supabase/schema.sql for the cloud tables.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sqlite3
@@ -64,7 +65,18 @@ CREATE TABLE IF NOT EXISTS account_snapshots (id INTEGER PRIMARY KEY AUTOINCREME
 CREATE TABLE IF NOT EXISTS token_market (symbol TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS bot_logs (id INTEGER PRIMARY KEY AUTOINCREMENT);
 CREATE TABLE IF NOT EXISTS pump_candidates (id INTEGER PRIMARY KEY AUTOINCREMENT);
+CREATE TABLE IF NOT EXISTS learning_outcomes (id TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS exit_telemetry (id INTEGER PRIMARY KEY AUTOINCREMENT);
+CREATE TABLE IF NOT EXISTS trade_analytics (trade_id TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS metrics_snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT);
+CREATE TABLE IF NOT EXISTS bot_state (key TEXT PRIMARY KEY, value TEXT);
 """
+
+# Phase-D learning/analytics tables now EXIST in the bot's Supabase project
+# (created via the SQL editor). They go through the normal Supabase path again;
+# SQLite remains the fallback only when Supabase is disabled. (Empty set kept so
+# the membership checks below stay valid and a table can be forced local later.)
+_SQLITE_ONLY_TABLES: set[str] = set()
 
 
 def _conn() -> sqlite3.Connection:
@@ -124,7 +136,10 @@ def _sqlite_select(table: str, where: str = "", args: tuple = (),
         sql += f" WHERE {where}"
     if order:  # PostgREST-style "col.dir" -> SQL "col dir"
         col, _, direction = order.partition(".")
-        sql += f" ORDER BY {col} {direction.upper() or 'ASC'}"
+        # Skip ordering if the column doesn't exist yet (table created lazily,
+        # columns auto-added on first write) so a pre-write read can't crash.
+        if col in _columns(c, table):
+            sql += f" ORDER BY {col} {direction.upper() or 'ASC'}"
     if limit:
         sql += f" LIMIT {int(limit)}"
     with _sqlite_lock:
@@ -160,8 +175,72 @@ async def _get_client() -> httpx.AsyncClient | None:
     return _client
 
 
+# --- async write queue (Phase D-0.7) ----------------------------------------
+# Trade-critical writes (exits, bot logs, telemetry, position snapshots) are
+# pushed onto a background queue so the trading path — especially the new
+# event-driven exit fast path — NEVER blocks on Supabase/SQLite I/O. A single
+# background drainer awaits them in order. Bounded + fail-safe: if the queue
+# saturates the item is dropped (logged), never blocking the producer. Reads
+# stay synchronous/awaited; only fire-and-forget writes use this.
+_wq: "asyncio.Queue | None" = None
+_writer_task: "asyncio.Task | None" = None
+WQ_MAX = int(os.getenv("PUMP_DB_QUEUE_MAX", "2000"))
+
+
+def enqueue(coro_factory) -> None:
+    """Schedule a DB write off the trading path. `coro_factory` is a zero-arg
+    callable returning an awaitable (e.g. `lambda: insert_exit(row)`). Non-
+    blocking; drops + logs if the writer isn't running or the queue is full."""
+    global _wq
+    if _wq is None:
+        try:
+            asyncio.create_task(coro_factory())   # pre-startup: best-effort inline
+        except Exception:
+            logger.debug("enqueue with no writer + no loop", exc_info=True)
+        return
+    try:
+        _wq.put_nowait(coro_factory)
+    except asyncio.QueueFull:
+        logger.warning("db write queue full -> dropping a write")
+
+
+async def _writer_loop() -> None:
+    assert _wq is not None
+    while True:
+        factory = await _wq.get()
+        try:
+            await factory()
+        except Exception:
+            logger.exception("queued db write failed")
+        finally:
+            _wq.task_done()
+
+
+async def start_writer() -> None:
+    """Start the background DB writer (idempotent). Call once on startup."""
+    global _wq, _writer_task
+    if _writer_task is not None:
+        return
+    _wq = asyncio.Queue(maxsize=WQ_MAX)
+    _writer_task = asyncio.create_task(_writer_loop())
+
+
+async def _drain_writer() -> None:
+    """Flush remaining queued writes (best-effort, bounded) then stop the writer."""
+    global _writer_task
+    if _wq is not None:
+        try:
+            await asyncio.wait_for(_wq.join(), timeout=5.0)
+        except Exception:
+            logger.debug("db queue drain timed out", exc_info=True)
+    if _writer_task is not None:
+        _writer_task.cancel()
+        _writer_task = None
+
+
 async def close() -> None:
     global _client, _sqlite_conn
+    await _drain_writer()
     if _client is not None:
         await _client.aclose()
         _client = None
@@ -172,7 +251,7 @@ async def close() -> None:
 
 
 async def _insert(table: str, rows: list[dict] | dict) -> None:
-    if enabled():
+    if enabled() and table not in _SQLITE_ONLY_TABLES:
         client = await _get_client()
         if client is None:
             return
@@ -189,7 +268,7 @@ async def _insert(table: str, rows: list[dict] | dict) -> None:
 
 
 async def _upsert(table: str, rows: list[dict] | dict, on_conflict: str) -> None:
-    if enabled():
+    if enabled() and table not in _SQLITE_ONLY_TABLES:
         client = await _get_client()
         if client is None:
             return
@@ -260,6 +339,36 @@ async def insert_exit(event: dict) -> None:
 
 async def insert_equity(point: dict) -> None:
     await _insert("equity_history", point)
+
+
+async def list_exits(user_id: str | None = None, limit: int = 5000) -> list[dict]:
+    """Past exit events (pnl + timestamp) so REALIZED P&L survives a restart.
+    Without this the paper balance recomputes from the base each boot and the
+    equity curve jumps back to the starting capital."""
+    if enabled():
+        client = await _get_client()
+        if client is None:
+            return []
+        try:
+            params = {"select": "pnl,at", "order": "at.desc", "limit": str(limit)}
+            if user_id is not None:
+                params["user_id"] = f"eq.{user_id}"
+            r = await client.get("/exit_events", headers=_headers(), params=params)
+            r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, list) else []
+        except Exception:
+            logger.exception("supabase read exit_events failed")
+            return []
+    try:
+        where, args = "", ()
+        if user_id is not None:
+            where, args = "user_id = ?", (user_id,)
+        return _sqlite_select("exit_events", where, args, select="pnl,at",
+                              order="at.desc", limit=limit)
+    except Exception:
+        logger.exception("sqlite read exit_events failed")
+        return []
 
 
 async def list_equity(limit: int = 200, user_id: str | None = None) -> list[dict]:
@@ -418,3 +527,96 @@ async def insert_bot_log(bot_name: str, status: str, message: str,
 
 async def insert_pump_candidate(row: dict) -> None:
     await _insert("pump_candidates", row)
+
+
+# --- learning persistence (outcomes survive restarts) ------------------------
+
+async def upsert_learning_outcomes(rows: list[dict]) -> None:
+    """Bulk upsert of learning outcomes (MFE/MAE/lead-time accumulate over time)."""
+    if not rows:
+        return
+    await _upsert("learning_outcomes", rows, on_conflict="id")
+
+
+async def list_learning_outcomes(limit: int = 500) -> list[dict]:
+    if enabled():
+        client = await _get_client()
+        if client is None:
+            return []
+        try:
+            r = await client.get("/learning_outcomes", headers=_headers(),
+                                 params={"select": "*", "order": "alert_at.desc", "limit": str(limit)})
+            r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, list) else []
+        except Exception:
+            logger.exception("supabase read learning_outcomes failed")
+            return []
+    try:
+        return _sqlite_select("learning_outcomes", order="alert_at.desc", limit=limit)
+    except Exception:
+        logger.exception("sqlite read learning_outcomes failed")
+        return []
+
+
+# --- exit-engine telemetry (latency / reaction diagnostics) ------------------
+
+async def insert_exit_telemetry(row: dict) -> None:
+    await _insert("exit_telemetry", row)
+
+
+# --- quantitative intelligence (Phase D analytics) ---------------------------
+
+async def upsert_trade_analytics(row: dict) -> None:
+    """Permanent per-trade analytics fact (Module 1). Upsert on trade_id so a
+    re-emit is idempotent. signals/dict fields are JSON-safe scalars already."""
+    await _upsert("trade_analytics", row, on_conflict="trade_id")
+
+
+async def list_trade_analytics(limit: int = 5000) -> list[dict]:
+    if enabled():
+        client = await _get_client()
+        if client is None:
+            return []
+        try:
+            r = await client.get("/trade_analytics", headers=_headers(),
+                                 params={"select": "*", "order": "exit_timestamp.desc",
+                                         "limit": str(limit)})
+            r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, list) else []
+        except Exception:
+            logger.exception("supabase read trade_analytics failed")
+            return []
+    try:
+        return _sqlite_select("trade_analytics", order="exit_timestamp.desc", limit=limit)
+    except Exception:
+        logger.exception("sqlite read trade_analytics failed")
+        return []
+
+
+async def insert_metrics_snapshot(row: dict) -> None:
+    """Periodic snapshot of headline metrics (expectancy/PF/drawdown) so trends
+    can be charted over time without recomputing from the full trade log."""
+    await _insert("metrics_snapshots", row)
+
+
+# --- tiny key/value bot state (survives restart) -----------------------------
+# Used for the adaptive entry threshold so the learning the bot did to its own
+# entry gate is CONTINUOUS across restarts (was reset to the initial value every
+# boot). Local SQLite is enough (single-box runtime state).
+
+async def set_state(key: str, value: str) -> None:
+    try:
+        _sqlite_write("bot_state", {"key": key, "value": str(value)}, replace=True)
+    except Exception:
+        logger.exception("set_state failed: %s", key)
+
+
+async def get_state(key: str) -> str | None:
+    try:
+        rows = _sqlite_select("bot_state", where="key = ?", args=(key,), limit=1)
+        return rows[0]["value"] if rows else None
+    except Exception:
+        logger.exception("get_state failed: %s", key)
+        return None

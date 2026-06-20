@@ -524,6 +524,12 @@ DASHBOARD_HTML = r"""<!doctype html>
         <div class="phead"><span class="pt">Pending proposals</span><span class="px" id="lrn-prop-c">0</span></div>
         <div id="lrn-proposals"><div class="empty">The analyzer needs settled outcomes (7-day horizon) before it recommends changes. Detection-only learning starts ~7 days after deploy.</div></div>
       </div>
+      <div class="panel">
+        <div class="phead"><span class="pt">Auto-ajuste del bot · qué afina solo</span><span class="px" id="at-thr">umbral —</span></div>
+        <table><thead><tr><th>Parámetro</th><th>Valor actual</th><th>¿Auto?</th><th>Cómo / cuándo</th></tr></thead>
+        <tbody id="at-body"><tr><td colspan="4" class="empty">cargando…</td></tr></tbody></table>
+        <div class="px" id="at-note" style="margin-top:8px;color:var(--muted)"></div>
+      </div>
       <div class="grid-2" style="grid-template-columns:1fr 1fr">
         <div class="panel"><div class="phead"><span class="pt">Component contributions · classic</span><span class="px">lift ≥ outcome</span></div><div id="lrn-comp-classic"><div class="empty">—</div></div></div>
         <div class="panel"><div class="phead"><span class="pt">Component contributions · long_pump</span><span class="px">lift ≥ outcome</span></div><div id="lrn-comp-long"><div class="empty">—</div></div></div>
@@ -552,6 +558,11 @@ DASHBOARD_HTML = r"""<!doctype html>
           <table><thead><tr><th>Token</th><th>Reason</th><th>%</th><th>Price</th><th>PnL</th></tr></thead>
           <tbody id="mg-exits"><tr><td colspan="5" class="empty">No exits yet</td></tr></tbody></table>
         </div>
+      </div>
+      <div class="panel">
+        <div class="phead"><span class="pt">Gráficos en vivo · inversiones del bot</span><span class="px" id="mg-charts-count">0 abiertas</span></div>
+        <div id="mg-charts" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px">
+          <div class="empty">Sin posiciones abiertas · los gráficos aparecen en tiempo real cuando el bot compra</div></div>
       </div>
       <div class="panel">
         <div class="phead"><span class="pt">Positions &amp; fills</span><span class="px" id="tr-count">0</span></div>
@@ -659,17 +670,8 @@ DASHBOARD_HTML = r"""<!doctype html>
     </div>
     <div class="mb">
       <div class="mfield"><label>Bot total (USDT)</label><input type="number" id="alloc-total" value="1000" min="0" step="50" /></div>
-      <div class="exbox" data-ex="mexc">
-        <div class="top"><b>MEXC</b><span class="bal">balance <span class="mono" id="bal-mexc">$0.0K</span></span></div>
-        <div class="row"><input type="range" min="0" max="100" value="100" id="r-mexc" /><span class="pct mono" id="p-mexc">100%</span></div>
-        <div class="cap mono">cap <span id="cap-mexc">$0.0K</span> · in open $0.00 · <span class="ok">OK</span></div>
-      </div>
-      <div class="exbox" data-ex="bitget">
-        <div class="top"><b>BITGET</b><span class="bal">balance <span class="mono" id="bal-bitget">$0.00</span></span></div>
-        <div class="row"><input type="range" min="0" max="100" value="0" id="r-bitget" /><span class="pct mono" id="p-bitget">0%</span></div>
-        <div class="cap mono">cap <span id="cap-bitget">$0.00</span> · in open $0.00 · <span class="ok">OK</span></div>
-      </div>
-      <div class="sumbar"><span>sum allocation: <span class="v" id="sum-val">100.0%</span></span><span id="sum-flag" class="ok">&check; valid</span></div>
+      <div id="alloc-exchanges"></div>
+      <div class="sumbar"><span>suma: <span class="v" id="sum-val">100%</span></span><span id="sum-flag" class="ok">&check; valid</span></div>
     </div>
     <div class="mfoot">
       <button class="btn" id="alloc-cancel">Cancel</button>
@@ -992,33 +994,43 @@ $("btn-update").addEventListener("click", async ()=>{
 });
 $("btn-discover").addEventListener("click", ()=>$("btn-update").click());
 
-// ---- allocation modal ----
+// ---- allocation modal: BINANCE/BYBIT/OKX/MEXC (operadores reales), tope total 100% ----
+const ALLOC_EX=["binance","bitget","mexc","okx"];
+const ALLOC_LBL={binance:"BINANCE",bitget:"BITGET",mexc:"MEXC",okx:"OKX"};
 async function openAlloc(){
   $("alloc-modal").classList.remove("hidden");
-  try{
-    const a=await (await fetch("/allocation")).json();
-    $("alloc-total").value=a.bot_total_usdt;
-    $("r-mexc").value=a.splits.mexc??100; $("r-bitget").value=a.splits.bitget??0;
-  }catch(e){}
+  let a={bot_total_usdt:1000,splits:{}};
+  try{ a=await (await fetch("/allocation")).json(); }catch(e){}
+  $("alloc-total").value=a.bot_total_usdt;
+  const sp=a.splits||{};
+  $("alloc-exchanges").innerHTML=ALLOC_EX.map(ex=>{
+    const v=Number(sp[ex]!=null?sp[ex]:25);
+    return `<div class="exbox" data-ex="${ex}">
+      <div class="top"><b>${ALLOC_LBL[ex]}</b><span class="bal">asignado <span class="mono" id="cap-${ex}">$0</span></span></div>
+      <div class="row"><input type="range" min="0" max="100" value="${v}" id="r-${ex}" /><span class="pct mono" id="p-${ex}">${v}%</span></div>
+    </div>`;
+  }).join("");
+  // Tope 100%: al subir un slider, si el total pasara de 100, se recorta ese mismo
+  // → imposible colocar más de 100% en conjunto.
+  ALLOC_EX.forEach(ex=>$("r-"+ex).addEventListener("input",()=>{
+    let others=0; ALLOC_EX.forEach(e=>{ if(e!==ex) others+=Number($("r-"+e).value)||0; });
+    const max=100-others;
+    if(Number($("r-"+ex).value)>max) $("r-"+ex).value=Math.max(0,max);
+    syncAlloc();
+  }));
   syncAlloc();
 }
 function syncAlloc(){
   const total=Number($("alloc-total").value)||0;
-  const m=Number($("r-mexc").value), b=Number($("r-bitget").value);
-  $("p-mexc").textContent=m+"%"; $("p-bitget").textContent=b+"%";
-  fillRange($("r-mexc")); fillRange($("r-bitget"));
-  $("bal-mexc").textContent=money(total*m/100); $("cap-mexc").textContent=money(total*m/100);
-  $("bal-bitget").textContent=money(total*b/100); $("cap-bitget").textContent=money(total*b/100);
-  const sum=m+b;
-  $("sum-val").textContent=sum.toFixed(1)+"%";
+  let sum=0;
+  ALLOC_EX.forEach(ex=>{ const v=Number($("r-"+ex).value)||0; sum+=v;
+    $("p-"+ex).textContent=v+"%"; fillRange($("r-"+ex)); $("cap-"+ex).textContent=money(total*v/100); });
+  $("sum-val").textContent=sum.toFixed(0)+"%";
   const ok=Math.abs(sum-100)<0.01;
-  $("sum-flag").textContent=ok?"✓ valid":"✗ must equal 100%";
+  $("sum-flag").textContent=ok?"✓ válido":(sum<100?"falta "+(100-sum)+"%":"✗ máx 100%");
   $("sum-flag").className=ok?"ok":"bad";
   $("alloc-save").disabled=!ok;
 }
-// Linked sliders: the two splits always sum to 100, so it is impossible to set >100%.
-$("r-mexc").addEventListener("input",()=>{ $("r-bitget").value = 100 - Number($("r-mexc").value); syncAlloc(); });
-$("r-bitget").addEventListener("input",()=>{ $("r-mexc").value = 100 - Number($("r-bitget").value); syncAlloc(); });
 $("alloc-total").addEventListener("input", syncAlloc);
 async function openBalance(){
   $("bal-modal").classList.remove("hidden");
@@ -1033,6 +1045,11 @@ async function openBalance(){
   snaps.forEach(s=>{
     const vals=s.values_usdt||{};
     rows+=`<div class="px" style="margin:6px 0 2px;color:var(--muted-2)">${upx(s.exchange)} · ${money(s.total_usdt)}</div>`;
+    const w=s.wallets||{};
+    const wk=Object.keys(w);
+    if(wk.length){
+      rows+=`<div style="font-size:11px;color:var(--muted-2);padding:0 0 3px">${wk.map(k=>`${k}: ${money(w[k])}`).join(" · ")}</div>`;
+    }
     rows+=Object.keys(vals).map(k=>`<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:2px 0">
         <span class="mono">${k}</span><span class="mono px">${(s.balances||{})[k]??""}</span><span class="mono" style="color:var(--green)">${money(vals[k])}</span></div>`).join("");
   });
@@ -1047,7 +1064,9 @@ $("alloc-close").addEventListener("click",()=>$("alloc-modal").classList.add("hi
 $("alloc-cancel").addEventListener("click",()=>$("alloc-modal").classList.add("hidden"));
 $("alloc-modal").addEventListener("click",(e)=>{if(e.target.id==="alloc-modal")$("alloc-modal").classList.add("hidden")});
 $("alloc-save").addEventListener("click", async ()=>{
-  const body={bot_total_usdt:Number($("alloc-total").value)||0,splits:{mexc:Number($("r-mexc").value),bitget:Number($("r-bitget").value)}};
+  const total=Number($("alloc-total").value)||0;
+  const splits={}; ALLOC_EX.forEach(ex=>{ splits[ex]=Number($("r-"+ex).value)||0; });
+  const body={bot_total_usdt:total,splits};
   try{ const r=await fetch("/allocation",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     if(r.ok){$("alloc-modal").classList.add("hidden"); loadOverview();} }catch(e){}
 });
@@ -1139,8 +1158,20 @@ function compHtml(c){
     <div style="flex:1;height:6px;border-radius:4px;background:var(--inset);overflow:hidden"><i style="display:block;height:100%;width:${Math.min(Math.abs(x.lift)*100,100)}%;background:${up?'var(--green)':'var(--red)'}"></i></div>
     <span class="mono" style="width:60px;text-align:right;color:${up?'var(--green)':'var(--red)'}">${up?'+':''}${x.lift}</span></div>`; }).join("") || '<div class="empty">—</div>';
 }
+async function loadAutotune(){
+  let a; try{ a=await (await fetch("/autotune")).json(); }catch(e){ return; }
+  $("at-thr").textContent="umbral "+a.threshold+" pts";
+  $("at-body").innerHTML=(a.rows||[]).map(r=>{
+    const tag=r.auto?'<span class="px" style="color:var(--green)">SÍ</span>'
+                    :'<span class="px" style="color:var(--muted)">fijo</span>';
+    return `<tr><td>${r.param}</td><td class="mono">${r.value}</td><td>${tag}</td>
+      <td class="px" style="color:var(--muted)">${r.how}</td></tr>`;
+  }).join("");
+  $("at-note").textContent=a.note||"";
+}
 async function loadLearning(){
   let d; try{ d=await (await fetch("/learning")).json(); }catch(e){ return; }
+  loadAutotune();
   $("le-ts").textContent=new Date().toLocaleTimeString();
   $("lrn-sub").textContent=`Feedback loop · ${d.window_days}d window · ${d.n_alerts} alerts · ${d.n_settled} settled outcomes`;
   $("lrn-prec").textContent = d.precision==null?"—":Math.round(d.precision*100)+"%";
@@ -1184,6 +1215,23 @@ async function loadTrades(){
       <td><span class="px">phase ${o.phase}</span></td>
       <td class="mono" style="color:${o.unrealized_pnl>=0?'var(--green)':'var(--red)'}">${o.unrealized_pnl>=0?'+':''}${o.unrealized_pnl}</td></tr>`;
   }).join("") : `<tr><td colspan="6" class="empty">No open positions · bot auto-enters on confirmed signals</td></tr>`;
+  // live TradingView charts of the bot's own open positions — rebuild iframes only when the symbol set changes (avoid reload every 15s)
+  const _open=(m.open||[]);
+  $("mg-charts-count").textContent=_open.length+" abiertas";
+  const _ckey=_open.map(o=>o.exchange+":"+o.symbol).sort().join("|");
+  if(_ckey!==window._mgChartKey){
+    window._mgChartKey=_ckey;
+    $("mg-charts").innerHTML=_open.length ? _open.map(o=>{
+      const tv=tvSymbol(o.exchange,o.symbol), up=o.gain_pct>=0;
+      return `<div style="border:1px solid var(--border-soft);border-radius:10px;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px">
+          <span class="sym">${o.symbol} <span class="px">${upx(o.exchange)}</span></span>
+          <span class="mono px" style="color:${up?'var(--green)':'var(--red)'}" data-mgpnl="${o.exchange}:${o.symbol}">${up?'+':''}${o.gain_pct}% · ${o.unrealized_pnl>=0?'+':''}${o.unrealized_pnl}</span></div>
+        ${tvEmbed(tv,190,{mini:true})}</div>`;
+    }).join("") : `<div class="empty">Sin posiciones abiertas · los gráficos aparecen en tiempo real cuando el bot compra</div>`;
+  } else {
+    _open.forEach(o=>{ const el=document.querySelector(`[data-mgpnl="${o.exchange}:${o.symbol}"]`); if(el){ const up=o.gain_pct>=0; el.style.color=up?'var(--green)':'var(--red)'; el.textContent=(up?'+':'')+o.gain_pct+'% · '+(o.unrealized_pnl>=0?'+':'')+o.unrealized_pnl; }});
+  }
   $("mg-exits").innerHTML=(m.exits||[]).length ? m.exits.map(e=>
     `<tr><td class="sym">${e.symbol}</td><td><span class="px">${e.reason}</span></td><td class="mono">${Math.round(e.fraction*100)}%</td>
      <td class="mono">${e.price}</td><td class="mono" style="color:${e.pnl>=0?'var(--green)':'var(--red)'}">${e.pnl>=0?'+':''}${e.pnl}</td></tr>`
@@ -1410,8 +1458,40 @@ async function loadMarketChip(sym){
     } else { el.textContent="MCap n/a · FDV n/a"; el.title="No CoinGecko match for this ticker"; }
   }catch(e){ el.textContent="MCap n/a · FDV n/a"; }
 }
-const CD_TABS=["Scoring","Timeline","Holders","Inflows","Alerts"];
+const CD_TABS=["Scoring","Chart","Timeline","Holders","Inflows","Alerts"];
 async function cdTab(name){ cdActive=name; if(cdCur) await renderCandidate(cdCur); }
+// --- TradingView live chart embed (real-time, like Coinbase/exchange chart) ---
+const TV_EX={mexc:"MEXC",bitget:"BITGET",binance:"BINANCE",bybit:"BYBIT",okx:"OKX",coinbase:"COINBASE",kucoin:"KUCOIN",gate:"GATEIO",gateio:"GATEIO",kraken:"KRAKEN"};
+function tvSymbol(exchange,symbol){
+  const ex=TV_EX[(exchange||"").toLowerCase()]||"MEXC";
+  const pair=(symbol||"").replace("/","").replace("-","").toUpperCase();
+  return ex+":"+pair;
+}
+function tvEmbed(tvsym,h,opts){
+  opts=opts||{}; h=h||360;
+  const mini=!!opts.mini;   // mini = position card: strip ALL chrome, area style
+  const p=[
+    "symbol="+encodeURIComponent(tvsym),
+    "interval="+(opts.interval||"5"),
+    "theme=dark",
+    "style="+(opts.style||(mini?"3":"1")),   // 3=area (clean), 1=candles
+    "locale=es","timezone=Etc/UTC",
+    "hidesidetoolbar=1","hide_side_toolbar=1",     // no left drawing tools
+    "hide_top_toolbar="+(mini?"1":"0"),            // modal keeps interval switcher
+    "hide_legend=1",                               // kill the floating O/H/L/C box
+    "withdateranges="+(mini?"0":"1"),
+    "details=0","hotlist=0","calendar=0","hideideas=1","saveimage=0","save_image=0"
+  ].join("&");
+  return `<iframe src="https://s.tradingview.com/widgetembed/?${p}" style="width:100%;height:${h}px;border:0;border-radius:10px;background:var(--inset);display:block" allowtransparency="true" scrolling="no" loading="lazy"></iframe>`;
+}
+function chartTab(c){
+  const tv=tvSymbol(c.exchange,c.symbol);   // chart del exchange real del token
+  return `<div class="navlabel" style="padding:0 0 8px">Gráfico en vivo · ${tv} · TradingView (tiempo real)</div>
+    ${tvEmbed(tv,400)}
+    <div class="px" style="color:var(--muted);margin-top:8px">
+      <a href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tv)}" target="_blank" rel="noopener" style="color:var(--purple)">↗ Abrir ${upx(c.exchange)} en TradingView</a>
+    </div>`;
+}
 async function loadDetail(c){
   const k=c.exchange+":"+c.symbol;
   if(cdDetail && cdDetail._k===k) return cdDetail;
@@ -1447,6 +1527,7 @@ async function renderCandidate(c){
   $("cd-tg").onclick=()=>window.open("https://www.google.com/search?q="+encodeURIComponent('"'+base+'" telegram pump'),"_blank","noopener");
   const body=$("cd-tabbody");
   if(cdActive==="Scoring"){ body.innerHTML=scoringTab(c); return; }
+  if(cdActive==="Chart"){ body.innerHTML=chartTab(c); return; }
   if(cdActive==="Alerts"){ body.innerHTML=alertsTab(c, alertsN); return; }
   body.innerHTML='<div class="empty">loading live market data…</div>';
   const d=await loadDetail(c);

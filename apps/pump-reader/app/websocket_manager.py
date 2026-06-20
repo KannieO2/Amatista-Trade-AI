@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 
 import websockets
 
@@ -50,8 +51,14 @@ class WebSocketManager:
         self.tasks: dict[str, asyncio.Task] = {}        # exchange -> connection task
         self.native2ccxt: dict[str, str] = {}           # "exchange:NATIVE" -> ccxt_symbol
         self.price_cache: dict[str, float] = {}         # "exchange:ccxt_symbol" -> price
+        self.price_ts: dict[str, float] = {}            # "exchange:ccxt_symbol" -> monotonic ts
         self.callbacks: list = []
         self.running = False
+        # --- health / diagnostics counters ---
+        self.msg_count = 0
+        self.last_msg_at = 0.0       # monotonic of the last parsed price
+        self.reconnects = 0
+        self.connects = 0
 
     def add_callback(self, cb) -> None:
         """cb(exchange: str, ccxt_symbol: str, price: float) -> Coroutine."""
@@ -59,6 +66,35 @@ class WebSocketManager:
 
     def get_price(self, exchange: str, ccxt_symbol: str) -> float | None:
         return self.price_cache.get(f"{exchange}:{ccxt_symbol}")
+
+    def get_price_fresh(self, exchange: str, ccxt_symbol: str, max_age_s: float) -> float | None:
+        """Price only if the last WS update is within max_age_s — else None so the
+        caller falls back to REST (never act on a frozen feed)."""
+        key = f"{exchange}:{ccxt_symbol}"
+        ts = self.price_ts.get(key)
+        if ts is None or (time.monotonic() - ts) > max_age_s:
+            return None
+        return self.price_cache.get(key)
+
+    def health(self) -> dict:
+        """Live socket health for the diagnostics panel / degradation alerts."""
+        now = time.monotonic()
+        n_sub = sum(len(s) for s in self.subs.values())
+        fresh = sum(1 for ts in self.price_ts.values() if now - ts <= 30)
+        stale = sum(1 for ts in self.price_ts.values() if now - ts > 30)
+        return {
+            "enabled": USE_WEBSOCKETS,
+            "running": self.running,
+            "exchanges": sorted(self.subs.keys()),
+            "subscriptions": n_sub,
+            "tracked_symbols": len(self.price_ts),
+            "fresh_feeds": fresh,
+            "stale_feeds": stale,
+            "messages": self.msg_count,
+            "connects": self.connects,
+            "reconnects": self.reconnects,
+            "last_msg_age_s": round(now - self.last_msg_at, 1) if self.last_msg_at else None,
+        }
 
     async def resync(self, pairs: list[tuple[str, str]]) -> None:
         """Set the desired (exchange, ccxt_symbol) subscriptions. (Re)starts the
@@ -105,6 +141,7 @@ class WebSocketManager:
             try:
                 async with websockets.connect(url, ping_interval=20, ping_timeout=15,
                                               close_timeout=5, max_queue=256) as ws:
+                    self.connects += 1
                     await self._subscribe(ws, exchange, syms)
                     async for msg in ws:
                         try:
@@ -114,6 +151,7 @@ class WebSocketManager:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
+                self.reconnects += 1
                 logger.debug("ws %s down: %s — reconnect in %ss", exchange, e, RECONNECT_DELAY)
                 await asyncio.sleep(RECONNECT_DELAY)
 
@@ -166,7 +204,12 @@ class WebSocketManager:
             ccxt_symbol = self.native2ccxt.get(f"{exchange}:{native}")
             if not ccxt_symbol or price <= 0:
                 continue
-            self.price_cache[f"{exchange}:{ccxt_symbol}"] = price
+            now = time.monotonic()
+            key = f"{exchange}:{ccxt_symbol}"
+            self.price_cache[key] = price
+            self.price_ts[key] = now
+            self.msg_count += 1
+            self.last_msg_at = now
             for cb in self.callbacks:
                 try:
                     asyncio.create_task(cb(exchange, ccxt_symbol, price))

@@ -22,7 +22,8 @@ AUTO_ENTRY_USD_DEFAULT = float(os.getenv("PUMP_AUTO_ENTRY_USD", "100"))
 
 
 def default_allocation() -> dict:
-    return {"bot_total_usdt": PAPER_BALANCE, "splits": {"mexc": 100.0, "bitget": 0.0}}
+    return {"bot_total_usdt": PAPER_BALANCE,
+            "splits": {"binance": 25.0, "bitget": 25.0, "mexc": 25.0, "okx": 25.0}}
 
 
 class UserBot:
@@ -43,15 +44,21 @@ class UserBot:
         # Real read-only balance — only populated for an account whose exchange
         # keys are set (today: the owner). Others stay paper (has_keys=False).
         self.real_account: dict = {"has_keys": False, "total_usdt": 0.0, "connected": [], "snapshots": []}
+        # Realized P&L from PREVIOUS sessions (loaded at startup from exit_events),
+        # so the paper balance + equity curve don't reset to the base capital on a
+        # restart. pm.history holds only THIS session's exits → no double count.
+        self.realized_carry: float = 0.0
+        self.carry_exits: list[dict] = []   # recent {"at", "pnl"} for the 7d figure
 
     def open_count(self) -> int:
         """Live OPEN managed positions (drives the max-open-trades risk cap)."""
         return sum(1 for p in list(self.pm.positions.values()) if not p.closed)
 
     def paper_equity(self) -> float:
-        """Paper balance = allocated capital + realized + unrealized demo gains."""
+        """Paper balance = allocated capital + realized (carried across restarts +
+        this session) + unrealized demo gains."""
         base = float(self.allocation.get("bot_total_usdt") or PAPER_BALANCE)
-        realized = sum(e.pnl for e in self.pm.history)
+        realized = self.realized_carry + sum(e.pnl for e in self.pm.history)
         unrealized = sum(
             (p.last_price - p.entry_price) * p.qty
             for p in self.pm.positions.values()
@@ -70,6 +77,14 @@ class UserBot:
                 ts = cutoff  # undated event → still count it
             if ts >= cutoff:
                 realized += e.pnl
+        # Plus exits carried from previous sessions that fall inside the window.
+        for ce in self.carry_exits:
+            try:
+                ts = datetime.fromisoformat(ce["at"]).timestamp()
+            except Exception:
+                continue
+            if ts >= cutoff:
+                realized += float(ce.get("pnl") or 0.0)
         unrealized = sum(
             (p.last_price - p.entry_price) * p.qty
             for p in self.pm.positions.values()
