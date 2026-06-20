@@ -1290,7 +1290,8 @@ async function loadTrades(){
     : `<tr><td colspan="10" class="empty">No trades yet · paper executor armed</td></tr>`;
   // live win-rate vs break-even health (Phase D analytics)
   try{
-    const a=await (await fetch("/analytics")).json();
+    const _r=await (await fetch("/analytics")).json();
+    const a=_r.dashboard||_r;   // /analytics wraps the metrics under .dashboard
     const wr=a.win_rate, be=a.breakeven_wr, mg=a.win_margin, n=a.total_trades||0, ok=a.edge_ok;
     const pct=v=>(v==null?'—':(v*100).toFixed(1)+'%');
     const col=ok?'var(--green)':'var(--red)';

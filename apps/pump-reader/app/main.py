@@ -1651,6 +1651,13 @@ async def diagnostics() -> dict:
 async def analytics_dashboard() -> dict:
     """Module 11 — headline performance dashboard + recent trades."""
     eng = get_analytics()
+    if not eng.trades:   # self-heal a transient startup-restore miss (was stuck at 0)
+        try:
+            rows = await store.list_trade_analytics()
+            if rows:
+                eng.load_rows(rows)
+        except Exception:
+            logger.debug("analytics lazy-reload failed", exc_info=True)
     return {"dashboard": eng.dashboard(), "recent_trades": eng.recent(30)}
 
 
