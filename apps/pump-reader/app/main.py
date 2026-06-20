@@ -50,7 +50,7 @@ from .market import market_for_symbol
 from . import notify
 from .notify import format_alert, send_telegram
 from .position_manager import (
-    BREAKEVEN_PCT, DUMP_TICK_PCT, TIMEOUT_MINUTES, ManagedPosition, PositionManager,
+    BREAKEVEN_PCT, DUMP_TICK_PCT, TIMEOUT_MINUTES, ExitEvent, ManagedPosition, PositionManager,
 )
 from .risk import RiskGuard
 from .scanner import (
@@ -958,6 +958,20 @@ async def _restore_positions() -> None:
                             bot.realized_carry, bot.uid, len(exits))
         except Exception:
             logger.exception("realized P&L restore failed for %s", bot.uid)
+        # Rehydrate the 'Recent Exits' feed so it survives a restart (pm.history is
+        # session-only -> went blank every boot even though exits are persisted).
+        try:
+            rex = await store.list_recent_exits(user_id=bot.uid, limit=20)
+            chron = sorted(rex, key=lambda r: r.get("at") or "")   # oldest -> newest
+            bot.pm.history = [ExitEvent(
+                symbol=r.get("symbol", ""), exchange=r.get("exchange", ""),
+                reason=r.get("reason", ""), sold_qty=float(r.get("sold_qty") or 0),
+                price=float(r.get("price") or 0), pnl=float(r.get("pnl") or 0),
+                fraction=float(r.get("fraction") or 1.0), closed=bool(r.get("closed", True)),
+                at=r.get("at") or "",
+            ) for r in chron]
+        except Exception:
+            logger.exception("recent exits rehydrate failed for %s", bot.uid)
     if total:
         logger.info("restored %d open positions across %d bots", total, len(all_bots()))
         await notify.send_system(f"🔄 <b>Estado recuperado</b> · {total} posiciones abiertas reconstruidas")

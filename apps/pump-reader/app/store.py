@@ -371,6 +371,36 @@ async def list_exits(user_id: str | None = None, limit: int = 5000) -> list[dict
         return []
 
 
+async def list_recent_exits(user_id: str | None = None, limit: int = 20) -> list[dict]:
+    """Full recent exit rows (symbol/reason/price/pnl) so the 'Recent Exits' feed
+    survives a restart — pm.history is session-only and went blank every boot."""
+    cols = "symbol,exchange,reason,sold_qty,price,pnl,fraction,closed,at"
+    if enabled():
+        client = await _get_client()
+        if client is None:
+            return []
+        try:
+            params = {"select": cols, "order": "at.desc", "limit": str(limit)}
+            if user_id is not None:
+                params["user_id"] = f"eq.{user_id}"
+            r = await client.get("/exit_events", headers=_headers(), params=params)
+            r.raise_for_status()
+            data = r.json()
+            return data if isinstance(data, list) else []
+        except Exception:
+            logger.exception("supabase read recent exits failed")
+            return []
+    try:
+        where, args = "", ()
+        if user_id is not None:
+            where, args = "user_id = ?", (user_id,)
+        return _sqlite_select("exit_events", where, args, select=cols,
+                              order="at.desc", limit=limit)
+    except Exception:
+        logger.exception("sqlite read recent exits failed")
+        return []
+
+
 async def list_equity(limit: int = 200, user_id: str | None = None) -> list[dict]:
     """Last `limit` equity points (oldest→newest) to rehydrate the curve."""
     if enabled():
