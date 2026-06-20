@@ -1011,6 +1011,13 @@ async def _handle_exit(bot: UserBot, pos, event) -> None:
                                         pos=pos, event=event, entry_grade=quality)
         except Exception:
             logger.exception("analytics close_trade failed")
+        # FSM: clear the 'entry' state so the closed trade stops showing as a live
+        # buy on the board (stale 'entry' piled up: 17 shown vs 1 actually open).
+        if _pipeline is not None:
+            try:
+                _pipeline.mark_closed(pos.symbol, pos.exchange)
+            except Exception:
+                logger.exception("pipeline mark_closed failed")
         # Exit-engine telemetry (Phase D-0.5): signal/entry/exit timing, where the
         # triggering price came from, and how the protective stops armed.
         tel_row = {

@@ -249,6 +249,22 @@ class Pipeline:
                 (now, symbol, exchange))
             self._conn.commit()
 
+    def mark_closed(self, symbol: str, exchange: str) -> None:
+        """main.py: the position for this token just CLOSED. Move it OUT of 'entry'
+        to a terminal state. Without this, 'entry' stuck forever and every closed
+        trade kept piling a stale 'buy' on the board (17 shown, 1 actually open).
+        Terminal => leaves the board, gets pruned, and can re-admit later if the
+        token sets up again (note_candidate re-admits expired/discard)."""
+        symbol, exchange = self._key(symbol, exchange)
+        now = int(time.time() * 1000)
+        with self._lock:
+            self._conn.execute(
+                "UPDATE fsm_state SET state='expired', updated_at=? "
+                "WHERE symbol=? AND exchange=? AND state='entry'",
+                (now, symbol, exchange))
+            self._conn.commit()
+        self._log(symbol, exchange, "entry", "expired", "trade_closed")
+
     def _all_active(self) -> list[dict]:
         with self._lock:
             self._conn.row_factory = sqlite3.Row
