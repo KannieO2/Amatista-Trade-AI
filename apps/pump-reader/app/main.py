@@ -9,6 +9,7 @@ kill switch (see docs/security-invariants.md).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import statistics
@@ -52,7 +53,10 @@ from .position_manager import (
     BREAKEVEN_PCT, DUMP_TICK_PCT, TIMEOUT_MINUTES, ManagedPosition, PositionManager,
 )
 from .risk import RiskGuard
-from .scanner import ScannedCandidate, _cluster, fetch_token_detail, forensic_check, scan_markets
+from .scanner import (
+    LEARNED_WEIGHTS, ScannedCandidate, _cluster, fetch_token_detail,
+    forensic_check, scan_markets, set_learned_weights,
+)
 from .velocity import VelocityWatcher, watch_list_from_scores
 from .learning import LearningLab
 from .websocket_manager import USE_WEBSOCKETS, get_manager
@@ -164,6 +168,11 @@ class ActResponse(BaseModel):
 # In-memory store keyed by "exchange:symbol" (Postgres persistence is the next
 # step; until DATABASE_URL is wired this is the source of truth).
 _candidates: dict[str, TokenCandidate] = {}
+# Re-evaluation accounting: every scan REBUILDS _candidates from live data, so a
+# token that no longer qualifies is simply not re-added (= discarded). This holds
+# the kept/discarded/new counts of the last pass for the dashboard, making the
+# (already-existing) re-analysis VISIBLE.
+_last_reeval: dict = {}
 
 # Per-user trading state — each account is its OWN bot (balance, positions, risk,
 # equity, P&L) and lives in the user_bot registry (get_bot / all_bots). The owner
@@ -190,6 +199,11 @@ VELOCITY_AUTOENTRY = os.getenv("PUMP_VELOCITY_AUTOENTRY", "false").lower() == "t
 # volume spike behind scan-path entries.
 ENTRY_MAX_CHASE_PCT = float(os.getenv("PUMP_ENTRY_MAX_CHASE_PCT", "60"))
 ENTRY_MIN_VOL_SPIKE = float(os.getenv("PUMP_ENTRY_MIN_VOL_SPIKE", "2.5"))
+# Anti-TOP guard (ALL entry paths): the 24h chase gate misses an INTRADAY spike —
+# a token flat over 24h but already +N% over the last few candles is going vertical
+# RIGHT NOW, so buying it = buying the top (this ate the EIGEN/SUI hard stops). A
+# real accumulation entry sits on a flat base, so this never blocks a true pre-pump.
+ENTRY_MAX_RUNUP_PCT = float(os.getenv("PUMP_ENTRY_MAX_RUNUP_PCT", "12"))
 # Confidence floor: the scanner's confidence_score (~35 thin spike … ~95 deep
 # book + clean live move) must clear this before any auto-entry. Filters the
 # low-confidence thin-book signals that just bleed the spread.
@@ -282,6 +296,15 @@ async def lifespan(app: FastAPI):
             logger.info("threshold restored from store: %.1f", _adaptive_threshold)
     except Exception:
         logger.exception("threshold restore failed")
+    # P5: restore the learned scoring weights (so the learned edge survives a
+    # restart). Falls back to neutral 1.0 if none persisted or parse fails.
+    try:
+        wsaved = await store.get_state("learned_weights")
+        if wsaved:
+            set_learned_weights(json.loads(wsaved))
+            logger.info("learned scoring weights restored: %s", wsaved)
+    except Exception:
+        logger.exception("learned-weights restore failed")
     # Microstructure recorder (FASE 1): inicia el observador y re-siembra su
     # watchlist desde la DB local para no perder pre-historia tras un reinicio.
     global _micro, _forensics, _pipeline
@@ -824,6 +847,9 @@ def _candidate_from_micro(exchange: str, symbol: str, intent_score: int) -> Toke
         classification="pre_pump_accumulation", cluster=cluster,
         spread_pct=float(r.get("spread_pct") or 0.0),
         top_book_share=float(r.get("top_book_share") or 0.0),
+        # Carry the recent price series so the anti-TOP guard works on this path too
+        # (a pre-pump signal must still be refused if price just spiked vertically).
+        spark=[float(x.get("last_price") or 0.0) for x in rows],
         status=CandidateStatus.approved, updated_at=datetime.now(UTC),
     )
 
@@ -1050,6 +1076,66 @@ def _persist_threshold() -> None:
     store.enqueue(lambda: store.set_state("adaptive_threshold", str(round(_adaptive_threshold, 2))))
 
 
+# --- P5: learning components -> scoring weights -----------------------------
+# The LearningLab measures, per signal, the LIFT = mean(confirmed pumps) -
+# mean(duds). A positive lift means that signal really separated winners, so it
+# should weigh MORE in the scanner's score; a negative/flat one should weigh less.
+# We normalise the lift within each cluster (signals are on different scales),
+# average across clusters, and map to a bounded multiplier the scanner clamps.
+_LEARN_KEYMAP = {
+    "volume_spike": "volume_spike",
+    "price_change_pct_24h": "price_change",
+    "orderbook_imbalance": "imbalance",
+    "liquidity_usd": "liquidity",
+}
+
+
+def _compute_learned_weights(components: dict) -> dict | None:
+    """Turn LearningLab lift into per-signal weights, or None if no cluster ready."""
+    acc: dict[str, list[float]] = {v: [] for v in _LEARN_KEYMAP.values()}
+    any_ready = False
+    for cluster in ("long_pump", "classic"):
+        c = components.get(cluster) or {}
+        if not c.get("ready"):
+            continue
+        contrib = c.get("contrib") or []
+        maxabs = max((abs(x.get("lift", 0.0)) for x in contrib), default=0.0)
+        if maxabs <= 0:
+            continue
+        any_ready = True
+        for x in contrib:
+            sk = _LEARN_KEYMAP.get(x.get("signal"))
+            if sk:
+                acc[sk].append(x.get("lift", 0.0) / maxabs)   # normalised [-1,1]
+    if not any_ready:
+        return None
+    # weight = 1 + 0.3 * avg(normalised lift)  -> bounded ~[0.7,1.3] (scanner clamps)
+    return {sk: round(1.0 + 0.3 * (sum(v) / len(v)), 3) if v else 1.0
+            for sk, v in acc.items()}
+
+
+def _learned_weights_str() -> str:
+    """Compact 'vol×1.0 prc×1.1 imb×0.9 liq×1.0' for the autotune table."""
+    w = LEARNED_WEIGHTS
+    return (f"vol×{w['volume_spike']:.2f} prc×{w['price_change']:.2f} "
+            f"imb×{w['imbalance']:.2f} liq×{w['liquidity']:.2f}")
+
+
+def _apply_learned_weights() -> dict | None:
+    """Recompute + push learned scoring weights from the LearningLab. Persisted so
+    the learned edge survives restarts. Returns the applied weights (or None)."""
+    try:
+        w = _compute_learned_weights((_lab.metrics() or {}).get("components") or {})
+        if w:
+            set_learned_weights(w)
+            store.enqueue(lambda: store.set_state("learned_weights", json.dumps(w)))
+            logger.info("✅ P5 pesos de scoring aprendidos aplicados: %s", w)
+        return w
+    except Exception:
+        logger.exception("learned-weights apply failed")
+        return None
+
+
 async def _optimize_tp_sl() -> None:
     """Optimiza el Trailing Stop (PUMP_DYNAMIC_STOP_PCT) y el Hard Stop
     (PUMP_STOP_LOSS_PCT) cada 24h a partir del forensics. Ya NO ajusta un
@@ -1066,7 +1152,15 @@ async def _optimize_tp_sl() -> None:
             trail = max(3.0, min(10.0, round(opt["avg_loss"] * 1.5, 1)))
             os.environ["PUMP_DYNAMIC_STOP_PCT"] = str(trail)
             os.environ["PUMP_STOP_LOSS_PCT"] = str(opt["sl"])
-            logger.info(f"✅ Trailing/Hard optimizado: Trailing={trail}%, HardStop={opt['sl']}% | Avg Win: {opt['avg_win']:.1f}%, Avg Loss: {opt['avg_loss']:.1f}%")
+            # P3: break-even auto-tune. Arm at ~40% of the typical win so a trade
+            # only locks no-loss AFTER a real move — never so low it scratches a live
+            # pump on a tiny wiggle (that capped wins at ~$0.9). Looser band [2.5, 6]
+            # so the trailing (5% giveback) does the profit-running, not break-even.
+            avg_win = opt.get("avg_win") or 0.0
+            be = max(2.5, min(6.0, round(avg_win * 0.4, 1))) if avg_win > 0 else None
+            if be:
+                os.environ["PUMP_BREAKEVEN_PCT"] = str(be)
+            logger.info(f"✅ Trailing/Hard/BE optimizado: Trailing={trail}%, HardStop={opt['sl']}%, BreakEven={be}% | Avg Win: {opt['avg_win']:.1f}%, Avg Loss: {opt['avg_loss']:.1f}%")
     except Exception:
         logger.exception("Trailing/SL optimization failed")
 
@@ -1091,6 +1185,7 @@ async def _optimization_loop() -> None:
         try:
             await _optimize_tp_sl()
             await _optimize_timeout()
+            await asyncio.to_thread(_apply_learned_weights)   # P5: retune scoring weights
 
             metrics = await asyncio.to_thread(_lab.metrics)
             if metrics.get("precision") is not None:
@@ -1619,6 +1714,17 @@ def _scan_exchanges() -> list[str]:
     return [e.strip().lower() for e in raw.split(",") if e.strip()]
 
 
+def _recent_runup_pct(spark: list[float]) -> float:
+    """% the price is already up from its recent base (last ~6 closes). Catches a
+    short parabolic spike the 24h chase gate misses — buying THIS is buying the top.
+    Returns 0.0 when the series is too short to tell (don't block on no data)."""
+    pts = [p for p in (spark or []) if p and p > 0][-6:]
+    if len(pts) < 3:
+        return 0.0
+    base = min(pts)
+    return (pts[-1] - base) / base * 100 if base > 0 else 0.0
+
+
 async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | None = None,
                       fsm_path: bool = False) -> bool:
     """Paper-only auto buy on a confirmed candidate into ONE user's bot; hand it
@@ -1653,6 +1759,15 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
             _record_learning(candidate.symbol, "skip_low_volume", "paper", candidate,
                              f"vol spike {candidate.volume_spike:.1f}x < {ENTRY_MIN_VOL_SPIKE}x")
             return False
+
+    # Anti-TOP guard — applies to EVERY path (incl. pre-pump): never buy a price
+    # that already went vertical in the last few candles. This is the short-term
+    # spike the 24h chase gate can't see, and it's what bought the EIGEN/SUI tops.
+    runup = _recent_runup_pct(candidate.spark)
+    if runup >= ENTRY_MAX_RUNUP_PCT:
+        _record_learning(candidate.symbol, "skip_parabolic", "paper", candidate,
+                         f"+{runup:.0f}% en velas recientes (tope, no acumulación)")
+        return False
 
     # (3) ForensicFilter — ALWAYS applies (capital integrity). Pre-pump uses a
     # lower liquidity floor (accumulation tokens have thinner books; rug already
@@ -1794,8 +1909,9 @@ async def _arbitrage_scan() -> None:
 
 
 async def _perform_scan(min_pump_score: int = 1) -> ScanResponse:
-    global _last_scan_at
+    global _last_scan_at, _last_reeval
     scanned = await scan_markets(_scan_exchanges(), min_pump_score=min_pump_score)
+    _prev_keys = set(_candidates.keys())   # what we held BEFORE this re-evaluation
     _candidates.clear()
     for item in scanned:
         candidate = _to_candidate(item)
@@ -1853,6 +1969,21 @@ async def _perform_scan(min_pump_score: int = 1) -> ScanResponse:
     except Exception:
         logger.exception("arbitrage scan failed")
     _last_scan_at = datetime.now(UTC)
+    # Re-evaluation summary: diff the rebuilt set against the previous pass so the
+    # discard is auditable (the bot re-checks EVERY scan and drops non-qualifiers).
+    _new_keys = set(_candidates.keys())
+    _discarded = _prev_keys - _new_keys
+    _last_reeval = {
+        "at": _last_scan_at.isoformat(),
+        "scanned": len(scanned),
+        "kept": len(_prev_keys & _new_keys),
+        "discarded": len(_discarded),
+        "new": len(_new_keys - _prev_keys),
+        "active": len(_new_keys),
+    }
+    if _prev_keys:
+        logger.info("re-eval: %d kept · %d descartados (ya no califican) · %d nuevos · %d activos",
+                    _last_reeval["kept"], _last_reeval["discarded"], _last_reeval["new"], _last_reeval["active"])
     # FASE 1 (microstructure): alimenta la watchlist de observación con los
     # símbolos del scan. NO cambia nada del trading — solo marca qué grabar.
     if _micro is not None:
@@ -1916,6 +2047,7 @@ async def status(request: Request) -> dict:
         "exchanges": _scan_exchanges(),
         "last_scan_at": _last_scan_at.isoformat() if _last_scan_at else None,
         "candidate_count": len(_candidates),
+        "reeval": _last_reeval,
         "kill_switch_active": bot.guard.kill_switch,
         "open_positions": bot.open_count(),
         "persistence": "supabase" if store.enabled() else "memory",
@@ -2245,6 +2377,24 @@ async def list_managed(request: Request) -> dict:
     }
 
 
+@app.get("/entry-rejections")
+async def entry_rejections() -> dict:
+    """Por qué el bot NO compró — prueba viva de que los filtros (anti-top,
+    anti-chase, confianza, forensic) rechazan de verdad. Lee el log de aprendizaje
+    en memoria (skip_* + forensic_block). Cada 'skip_parabolic' = un tope evitado."""
+    skips = [r for r in _learning
+             if r.action.startswith("skip_") or r.action == "forensic_block"]
+    counts = {
+        "parabolic": sum(1 for r in skips if r.action == "skip_parabolic"),
+        "exhausted": sum(1 for r in skips if r.action == "skip_exhausted"),
+        "weak": sum(1 for r in skips if r.action in ("skip_low_confidence", "skip_low_volume")),
+        "forensic": sum(1 for r in skips if r.action == "forensic_block"),
+    }
+    recent = [{"t": r.created_at.isoformat(), "symbol": r.symbol,
+               "action": r.action, "detail": r.detail} for r in skips[-20:][::-1]]
+    return {"total": len(skips), "counts": counts, "recent": recent}
+
+
 @app.get("/autotune")
 async def autotune_status() -> dict:
     """Qué afina el bot SOLO vs qué es fijo. Lee os.environ en vivo (el optimizador
@@ -2265,7 +2415,9 @@ async def autotune_status() -> dict:
             {"param": "Timeout (corte por tiempo)", "value": f"{envf('PUMP_TIMEOUT_MINUTES','8')} min",
              "auto": True, "how": "24h desde lead-time del aprendizaje"},
             {"param": "Break-even (protección)", "value": f"{envf('PUMP_BREAKEVEN_PCT','4')}%",
-             "auto": False, "how": "fijo (pendiente de auto-ajuste)"},
+             "auto": True, "how": "24h ~30% del win típico · banda [1.5,4] (P3)"},
+            {"param": "Pesos del scoring (señales)", "value": _learned_weights_str(),
+             "auto": True, "how": "24h desde el lift confirmado-vs-dud del aprendizaje · banda [0.7,1.3] (P5)"},
             {"param": "Dump detector (caída de 1 tick)", "value": f"{envf('PUMP_DUMP_TICK_PCT','10')}%",
              "auto": False, "how": "fijo"},
             {"param": "Tamaño por operación", "value": f"${envf('PUMP_AUTO_ENTRY_USD','50')}",

@@ -530,6 +530,17 @@ DASHBOARD_HTML = r"""<!doctype html>
         <tbody id="at-body"><tr><td colspan="4" class="empty">cargando…</td></tr></tbody></table>
         <div class="px" id="at-note" style="margin-top:8px;color:var(--muted)"></div>
       </div>
+      <div class="panel">
+        <div class="phead"><span class="pt">Entradas rechazadas · el bot NO compró (prueba de los filtros)</span><span class="px" id="rj-total">0</span></div>
+        <div class="grid-kpi" style="margin-bottom:10px">
+          <div class="card"><div class="klabel">Tope / parabólica</div><div class="kval" id="rj-parabolic">0</div><div class="ksub">anti-top (nuevo)</div></div>
+          <div class="card"><div class="klabel">Ya corrido 24h</div><div class="kval" id="rj-exhausted">0</div><div class="ksub">anti-chase</div></div>
+          <div class="card"><div class="klabel">Confianza / vol baja</div><div class="kval" id="rj-weak">0</div><div class="ksub">señal floja</div></div>
+          <div class="card"><div class="klabel">Forensic / riesgo</div><div class="kval" id="rj-forensic">0</div><div class="ksub">libro malo</div></div>
+        </div>
+        <table><thead><tr><th>Hora</th><th>Token</th><th>Motivo</th><th>Detalle</th></tr></thead>
+        <tbody id="rj-body"><tr><td colspan="4" class="empty">Sin rechazos aún · aparecen cuando el bot descarta una entrada</td></tr></tbody></table>
+      </div>
       <div class="grid-2" style="grid-template-columns:1fr 1fr">
         <div class="panel"><div class="phead"><span class="pt">Component contributions · classic</span><span class="px">lift ≥ outcome</span></div><div id="lrn-comp-classic"><div class="empty">—</div></div></div>
         <div class="panel"><div class="phead"><span class="pt">Component contributions · long_pump</span><span class="px">lift ≥ outcome</span></div><div id="lrn-comp-long"><div class="empty">—</div></div></div>
@@ -546,7 +557,23 @@ DASHBOARD_HTML = r"""<!doctype html>
 
     <!-- ============ TRADES VIEW ============ -->
     <section class="view hidden" id="view-trades">
-      <div class="vhead"><div><h1>Trades</h1><p>Auto-entry &rarr; two-phase exit (60/40) &rarr; trailing &amp; dump detector</p></div><div class="ts mono" id="tr-ts">—</div></div>
+      <div class="vhead"><div><h1>Trades</h1><p>Auto-entry &rarr; trailing stop sobre el pico (100%) &amp; dump detector</p></div><div class="ts mono" id="tr-ts">—</div></div>
+      <div class="panel" id="wr-panel" style="margin-bottom:14px">
+        <div class="phead"><span class="pt">Salud del edge · win rate vs break-even</span><span class="px" id="wr-edge">—</span></div>
+        <div style="display:flex;gap:22px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
+          <div><div class="px">WIN RATE REAL</div><div class="kval mono" id="wr-win" style="font-size:30px">—</div></div>
+          <div><div class="px">BREAK-EVEN</div><div class="kval mono" id="wr-be" style="font-size:22px;color:var(--muted-2)">—</div></div>
+          <div><div class="px">MARGEN</div><div class="kval mono" id="wr-margin" style="font-size:22px">—</div></div>
+          <div><div class="px">PROFIT FACTOR</div><div class="kval mono" id="wr-pf" style="font-size:22px">—</div></div>
+          <div><div class="px">EXPECTANCY/TRADE</div><div class="kval mono" id="wr-exp" style="font-size:22px">—</div></div>
+          <div><div class="px">TRADES</div><div class="kval mono" id="wr-n" style="font-size:22px">—</div></div>
+        </div>
+        <div style="position:relative;height:16px;background:var(--inset);border-radius:9px;overflow:visible">
+          <div id="wr-fill" style="height:100%;width:0%;border-radius:9px;transition:width .4s,background .4s"></div>
+          <div id="wr-bemark" style="position:absolute;top:-4px;bottom:-4px;width:2px;background:#fff;left:28%"></div>
+        </div>
+        <div class="px" id="wr-note" style="margin-top:9px">—</div>
+      </div>
       <div class="grid-2b">
         <div class="panel">
           <div class="phead"><span class="pt">Managed positions</span><span class="px" id="mg-count">0</span></div>
@@ -1169,9 +1196,26 @@ async function loadAutotune(){
   }).join("");
   $("at-note").textContent=a.note||"";
 }
+async function loadRejections(){
+  let a; try{ a=await (await fetch("/entry-rejections")).json(); }catch(e){ return; }
+  const c=a.counts||{};
+  $("rj-total").textContent=(a.total||0)+" rechazos";
+  $("rj-parabolic").textContent=c.parabolic||0;
+  $("rj-exhausted").textContent=c.exhausted||0;
+  $("rj-weak").textContent=c.weak||0;
+  $("rj-forensic").textContent=c.forensic||0;
+  const MOT={skip_parabolic:"Tope/parabólica",skip_exhausted:"Ya corrido 24h",skip_low_confidence:"Baja confianza",skip_low_volume:"Bajo volumen",forensic_block:"Forensic/riesgo"};
+  const rows=a.recent||[];
+  $("rj-body").innerHTML=rows.length ? rows.map(r=>
+    `<tr><td class="mono px">${new Date(r.t).toLocaleTimeString()}</td><td class="sym">${r.symbol}</td>
+     <td><span class="px" style="color:${r.action==='skip_parabolic'?'var(--green)':'var(--muted-2)'}">${MOT[r.action]||r.action}</span></td>
+     <td class="px" style="color:var(--muted)">${r.detail||''}</td></tr>`
+  ).join("") : `<tr><td colspan="4" class="empty">Sin rechazos aún · aparecen cuando el bot descarta una entrada</td></tr>`;
+}
 async function loadLearning(){
   let d; try{ d=await (await fetch("/learning")).json(); }catch(e){ return; }
   loadAutotune();
+  loadRejections();
   $("le-ts").textContent=new Date().toLocaleTimeString();
   $("lrn-sub").textContent=`Feedback loop · ${d.window_days}d window · ${d.n_alerts} alerts · ${d.n_settled} settled outcomes`;
   $("lrn-prec").textContent = d.precision==null?"—":Math.round(d.precision*100)+"%";
@@ -1244,6 +1288,30 @@ async function loadTrades(){
     <td class="mono">${money(f.notional_usd)}</td><td class="mono">${f.fill_price}</td><td class="mono">${f.amount}</td>
     <td class="mono px">${f.stop_loss}</td><td class="mono px">${f.take_profit}</td></tr>`).join("")
     : `<tr><td colspan="10" class="empty">No trades yet · paper executor armed</td></tr>`;
+  // live win-rate vs break-even health (Phase D analytics)
+  try{
+    const a=await (await fetch("/analytics")).json();
+    const wr=a.win_rate, be=a.breakeven_wr, mg=a.win_margin, n=a.total_trades||0, ok=a.edge_ok;
+    const pct=v=>(v==null?'—':(v*100).toFixed(1)+'%');
+    const col=ok?'var(--green)':'var(--red)';
+    $("wr-win").textContent=pct(wr); $("wr-win").style.color=(wr==null?'var(--muted-2)':col);
+    $("wr-be").textContent=pct(be);
+    $("wr-margin").textContent=(mg==null?'—':((mg>=0?'+':'')+(mg*100).toFixed(1)+' pts'));
+    $("wr-margin").style.color=(mg==null?'var(--muted-2)':col);
+    $("wr-pf").textContent=(a.profit_factor==null?'—':a.profit_factor);
+    $("wr-exp").textContent=(a.expectancy==null?'—':('$'+a.expectancy));
+    $("wr-exp").style.color=(a.expectancy==null?'var(--muted-2)':(a.expectancy>=0?'var(--green)':'var(--red)'));
+    $("wr-n").textContent=n;
+    $("wr-fill").style.width=((wr==null?0:Math.min(100,wr*100)))+'%';
+    $("wr-fill").style.background=col;
+    $("wr-bemark").style.left=(Math.min(100,(be||0)*100))+'%';
+    $("wr-edge").textContent=(n<20?('CALENTANDO · '+n+'/20'):(ok?'EDGE SANO':'EDGE NEGATIVO'));
+    $("wr-edge").style.color=(n<20?'var(--muted-2)':col);
+    $("wr-note").textContent = n<20
+      ? `Pocos datos (${n}/20). Break-even teórico ${pct(be)} (R:R del motor). Veredicto real a los 20+ trades cerrados.`
+      : (ok ? `Sano: aciertas ${pct(wr)} y solo necesitas ${pct(be)} para no perder. Margen ${(mg*100).toFixed(1)} pts a favor.`
+            : `Atención: aciertas ${pct(wr)} pero el payoff exige ${pct(be)}. El edge es negativo — bajar riesgo o subir umbral.`);
+  }catch(e){}
 }
 function plScoreCell(v, invert){
   const n=Number(v)||0; const good = invert ? n<=40 : n>=55;

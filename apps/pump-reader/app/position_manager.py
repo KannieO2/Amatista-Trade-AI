@@ -72,6 +72,9 @@ def exit_profile(cluster: str) -> dict:
         "dump_tick_pct": float(os.getenv("PUMP_DUMP_TICK_PCT", "10")),
         "timeout_min": float(os.getenv("PUMP_TIMEOUT_MINUTES", "8")),
         "max_hold_min": float(os.getenv("PUMP_MAX_HOLD_MINUTES", "45")),
+        # P3: break-even read LIVE so the 24h optimizer can retune it (was a frozen
+        # import constant). Cluster-neutral on purpose — not in CLUSTER_TUNE.
+        "breakeven_pct": float(os.getenv("PUMP_BREAKEVEN_PCT", "4")),
     }
     tune = CLUSTER_TUNE.get(cluster)
     if tune:
@@ -184,7 +187,7 @@ class PositionManager:
             return events
         # Break-even: once gain crossed +BREAKEVEN_PCT, the stop moves to entry +
         # margin. Falling back to it locks the trade at ~breakeven (no give-back).
-        if not pos.be_armed and gain >= BREAKEVEN_PCT:
+        if not pos.be_armed and gain >= p["breakeven_pct"]:
             pos.be_armed = True
             pos.be_stop = pos.entry_price * (1 + BREAKEVEN_MARGIN_PCT / 100)
             pos.be_at = now

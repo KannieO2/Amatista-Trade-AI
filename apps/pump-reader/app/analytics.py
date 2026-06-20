@@ -483,9 +483,21 @@ class AnalyticsEngine:
         pf = profit_factor_of(self.trades)
         dd = drawdown_of(self.trades)
         ranking = self.setup_ranking()
+        # Break-even win rate the current payoff demands: BE = avgLoss/(avgWin+avgLoss)
+        # = 1/(1+R:R). Below it the edge is negative no matter how it "feels".
+        # No live R:R yet → fall back to the engine-derived reference (R:R 2.51 → ~28%).
+        rr = ex["rr"]
+        if rr and rr > 0:
+            be_wr = round(1.0 / (1.0 + rr), 4)
+        else:
+            be_wr = round(float(os.getenv("PUMP_BREAKEVEN_WR_REF", "0.285")), 4)
+        wr = ex["win_rate"]
+        edge_ok = (wr is not None) and (wr >= be_wr)
         return {
             "total_trades": len(self.trades),
             "win_rate": ex["win_rate"], "loss_rate": ex["loss_rate"],
+            "breakeven_wr": be_wr, "rr": rr, "edge_ok": edge_ok,
+            "win_margin": (round(wr - be_wr, 4) if wr is not None else None),
             "profit_factor": pf["profit_factor"],
             "expectancy": ex["expectancy"],
             "avg_win": ex["avg_win"], "avg_loss": ex["avg_loss"],

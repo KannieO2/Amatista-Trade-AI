@@ -224,6 +224,26 @@ def _volume_spike(ohlcv: list[list[float]]) -> float:
     return recent / base
 
 
+# P5 — learning-tuned signal weights. Bounded multipliers the LearningLab feeds in
+# (from the confirmed-vs-failed lift of each signal): a signal that historically
+# separated REAL pumps from duds gets boosted, a noisy one gets damped. Default 1.0
+# = byte-identical to the hand-tuned rules until enough settled outcomes exist.
+# Clamped [0.7,1.3] so learning can TILT the edge but never dominate or invert it.
+LEARNED_WEIGHTS: dict[str, float] = {
+    "volume_spike": 1.0, "price_change": 1.0, "imbalance": 1.0, "liquidity": 1.0,
+}
+
+
+def set_learned_weights(weights: dict) -> None:
+    """Apply learned per-signal weights (called by main.py from LearningLab). Each
+    value clamped to [0.7,1.3]; unknown keys ignored; bad values skipped."""
+    for k in LEARNED_WEIGHTS:
+        try:
+            LEARNED_WEIGHTS[k] = max(0.7, min(1.3, float(weights.get(k, 1.0))))
+        except (TypeError, ValueError):
+            continue
+
+
 def score_candidate(
     *,
     price_change_pct: float,
@@ -235,60 +255,72 @@ def score_candidate(
 
     Returns (pump_score, confidence, classification, flags, score_long_pump,
     score_classic, cluster). The cluster is whichever criterion scores higher, so
-    the UI can say which one is "sounding" louder.
+    the UI can say which one is "sounding" louder. Each signal group's points are
+    scaled by LEARNED_WEIGHTS (P5) — at the default 1.0 the result is unchanged.
     """
     flags: list[str] = []
     low_liquidity = liquidity_usd < LOW_LIQUIDITY_USD
+    w = LEARNED_WEIGHTS
 
     # --- long_pump (buyer impulse): volume explosion + price run + stacked bids
-    lp = 0.0
+    lp_vol = 0.0
     if volume_spike >= 10:
-        lp += 45
+        lp_vol = 45
         flags.append("extreme_volume_spike")
     elif volume_spike >= 6:
-        lp += 35
+        lp_vol = 35
         flags.append("high_volume_spike")
     elif volume_spike >= 3:
-        lp += 25
+        lp_vol = 25
         flags.append("volume_spike")
+    lp_price = 0.0
     if price_change_pct >= 50:
-        lp += 35
+        lp_price = 35
         flags.append("price_parabolic")
     elif price_change_pct >= 25:
-        lp += 25
+        lp_price = 25
         flags.append("price_running")
     elif price_change_pct >= 10:
-        lp += 15
+        lp_price = 15
+    lp_imb = 0.0
     if imbalance >= 0.80:
-        lp += 20
+        lp_imb = 20
         flags.append("bids_stacked")
     elif imbalance >= 0.65:
-        lp += 10
+        lp_imb = 10
+    lp_liq = 0.0
     if low_liquidity and volume_spike >= 3:
         # Thin book + manufactured volume is the classic scam/criminal pump tell.
-        lp += 15
+        lp_liq = 15
         flags.append("low_liquidity_trap")
+    lp = (lp_vol * w["volume_spike"] + lp_price * w["price_change"]
+          + lp_imb * w["imbalance"] + lp_liq * w["liquidity"])
 
     # --- classic (short-squeeze grind): stacked book grinding up, modest volume
-    cl = 0.0
+    cl_imb = 0.0
     if imbalance >= 0.80:
-        cl += 40
+        cl_imb = 40
     elif imbalance >= 0.70:
-        cl += 30
+        cl_imb = 30
     elif imbalance >= 0.60:
-        cl += 18
+        cl_imb = 18
     elif imbalance >= 0.55:
-        cl += 8
+        cl_imb = 8
+    cl_price = 0.0
     if 5 <= price_change_pct < 25:
-        cl += 25
+        cl_price = 25
     elif 25 <= price_change_pct < 50:
-        cl += 12
+        cl_price = 12
+    cl_vol = 0.0
     if volume_spike < 3:
-        cl += 15
+        cl_vol = 15
     elif volume_spike < 6:
-        cl += 8
+        cl_vol = 8
+    cl_liq = 0.0
     if low_liquidity and imbalance >= 0.65:
-        cl += 10
+        cl_liq = 10
+    cl = (cl_imb * w["imbalance"] + cl_price * w["price_change"]
+          + cl_vol * w["volume_spike"] + cl_liq * w["liquidity"])
 
     score_long_pump = int(max(0, min(100, round(lp))))
     score_classic = int(max(0, min(100, round(cl))))
