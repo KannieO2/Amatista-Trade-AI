@@ -1,0 +1,13 @@
+# No meter secretos ni data local en la imagen (el .env va por env_file, la data
+# por volumen). Mantiene la imagen chica y evita filtrar claves dentro del build.
+.env
+.env.*
+data/
+sims/
+graphify-out/
+**/__pycache__/
+*.pyc
+.venv/
+.git/
+*.db
+*.log

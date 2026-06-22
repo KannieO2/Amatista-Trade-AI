@@ -1,0 +1,58 @@
+# Amatista TradeOS — APP COMPLETA, los DOS bots en una VM.
+#
+#   pump-reader  (Python/FastAPI :8000)  -> dashboard + detector ScamPump (gainers
+#                                           + pre-pump). Hace de reverse-proxy
+#                                           /grid/* hacia el grvtbot.
+#   grvtbot      (Node :3848)            -> bot de grid GRVT (el tab "Grid Bot").
+#
+# Una sola red privada: pump-reader llega al grvtbot por su nombre de servicio
+# (GRVT_BACKEND_HOST=grvtbot:3848), NO por 127.0.0.1 (cada contenedor tiene su
+# propio localhost). Solo pump-reader publica puerto (atado a 127.0.0.1 → túnel SSH).
+#
+# Arranque:  docker compose up -d --build
+# Ver todo:  http://localhost:8000  (pump) · el tab Grid Bot embebe el grvtbot.
+services:
+  grvtbot:
+    build:
+      context: ./bots/grvtbot
+      dockerfile: packages/bot/Dockerfile
+    image: amatista-grvtbot:latest
+    container_name: amatista-grvtbot
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    env_file: ./bots/grvtbot/.env      # GRVT API keys + DASHBOARD_* (secretos)
+    environment:
+      NODE_ENV: production
+      DASHBOARD_PORT: "3848"
+    expose:
+      - "3848"                          # interno a la red; no se publica al host
+    volumes:
+      - ./bots/grvtbot/data:/app/data
+      - ./bots/grvtbot/logs/bot:/app/logs
+    networks: [amatista]
+
+  pump-reader:
+    build:
+      context: ./bots/pump-reader
+    image: amatista-pump:latest
+    container_name: amatista-pump
+    restart: unless-stopped
+    env_file: ./.env                    # secretos del pump (Supabase/Telegram/CMC/...)
+    environment:
+      GRVT_BACKEND_HOST: "grvtbot:3848" # apunta el proxy /grid/* al otro contenedor
+      PUMP_SUPERVISE_GRID: "false"      # el grid es su PROPIO contenedor → no lanzar node local
+    ports:
+      - "127.0.0.1:8000:8000"           # NO expuesto a internet → túnel SSH
+    volumes:
+      - ./bots/pump-reader/data:/app/data
+    depends_on:
+      - grvtbot
+    networks: [amatista]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
+networks:
+  amatista:
+    driver: bridge

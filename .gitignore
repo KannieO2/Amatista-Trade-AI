@@ -17,6 +17,7 @@ external/
 
 # microstructure recorder DB (FASE 1) — datos locales, no versionar
 apps/pump-reader/data/
+bots/pump-reader/data/
 *.db
 *.db-wal
 *.db-shm
