@@ -434,7 +434,6 @@ DASHBOARD_HTML = r"""<!doctype html>
       <a data-view="alerts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0112 0c0 7 3 7 3 7H3s3 0 3-7"/></svg>Alerts</a>
       <a data-view="learning"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M21 8v6"/></svg>Learning</a>
       <a data-view="trades"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 7-8"/></svg>Trades<span class="badge">P6</span></a>
-      <a data-view="gainers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l5-5 4 3 6-8 3 3"/><path d="M17 4h4v4"/></svg>Gainers<span class="badge">MOM</span></a>
       <a data-view="pipeline"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 6h6a4 4 0 014 4M7 18h6a4 4 0 004-4"/></svg>Análisis<span class="badge">FSM</span></a>
       <a data-view="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>Settings</a>
     </nav>
@@ -677,37 +676,8 @@ DASHBOARD_HTML = r"""<!doctype html>
       </div>
     </section>
 
-    <!-- ============ GAINERS VIEW (momentum / velocity — sección aparte) ============ -->
-    <section class="view hidden" id="view-gainers">
-      <div class="vhead"><div><h1>Gainers · momentum</h1><p>Motor velocity — monta el movimiento ya confirmado (dinero progresivo). Separado del detector pre-pump.</p></div><div class="ts mono" id="g-ts">—</div></div>
-      <div class="grid-2">
-        <div class="panel">
-          <div class="phead"><span class="pt">P&amp;L Gainers</span><span class="px" id="g-engine">—</span></div>
-          <div class="gstats">
-            <div class="sbox"><div class="l">P&amp;L total</div><div class="v mono" id="g-pnl">—</div></div>
-            <div class="sbox"><div class="l">Realizado</div><div class="v mono" id="g-real">—</div></div>
-            <div class="sbox"><div class="l">No realizado</div><div class="v mono" id="g-unreal">—</div></div>
-            <div class="sbox"><div class="l">Abiertas</div><div class="v mono" id="g-open">—</div></div>
-            <div class="sbox"><div class="l">Cerradas</div><div class="v mono" id="g-trades">—</div></div>
-          </div>
-          <div class="px" style="margin-top:11px;line-height:1.6">Velocity persigue el momentum = entra DESPUÉS del arranque (por diseño). El guard anti-tarde evita comprar el fade tras el pico.</div>
-        </div>
-        <div class="panel">
-          <div class="phead"><span class="pt">Motor velocity · vigilando</span><span class="px" id="g-vel-meta">—</span></div>
-          <div id="g-watch"><div class="empty" style="padding:18px 0">Cargando hot-list…</div></div>
-        </div>
-      </div>
-      <div class="panel" style="margin-top:14px">
-        <div class="phead"><span class="pt">Gráficos en vivo · gainers</span><span class="px" id="g-charts-count">0 abiertas</span></div>
-        <div id="g-charts" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px">
-          <div class="empty" style="padding:16px 0">Sin gainers abiertos · aparecen cuando velocity dispara una entrada de momentum</div></div>
-      </div>
-      <div class="panel" style="margin-top:14px">
-        <div class="phead"><span class="pt">Salidas recientes · gainers</span><span class="px" id="g-exit-count">0</span></div>
-        <table><thead><tr><th>Token</th><th>Reason</th><th>%</th><th>Price</th><th>PnL</th></tr></thead>
-        <tbody id="g-exits"><tr><td colspan="5" class="empty">Sin salidas de gainers todavía</td></tr></tbody></table>
-      </div>
-    </section>
+    <!-- Vista Gainers retirada: motor velocity reciclado como acelerador del FSM pre-pump.
+         La app caza criminal-pumps (acumulación), no momentum. -->
 
     <!-- ============ FASE 2 / PIPELINE VIEW ============ -->
     <section class="view hidden" id="view-pipeline">
@@ -776,21 +746,13 @@ DASHBOARD_HTML = r"""<!doctype html>
           </div>
         </div>
 
-        <!-- ===== BOT GAINERS (momentum) ===== -->
-        <div class="cfg-card cfg-gain">
-          <div class="cfg-cap" style="color:var(--green)">⚡ BOT GAINERS · momentum <span class="px" style="font-weight:500">— entra en la subida</span></div>
-          <div class="mono" id="cfg-gainers" style="padding:0 0 10px;font-size:12px">—</div>
-          <div class="gform">
-            <div class="gf"><label>Disparo · × volumen</label><input id="cfg-accel" type="number" min="1" max="20" step="0.5" class="mono" title="Aceleración de volumen que dispara una entrada gainers. Más alto = más selectivo, entra en moves más fuertes." /></div>
-          </div>
-        </div>
-
-        <!-- ===== BOT PRE-PUMP (FSM) ===== -->
+        <!-- ===== BOT PRE-PUMP (FSM) — única estrategia: caza criminal-pumps ===== -->
         <div class="cfg-card cfg-pump">
-          <div class="cfg-cap" style="color:#5aa0ff">🎯 BOT PRE-PUMP · FSM <span class="px" style="font-weight:500">— entra en la acumulación</span></div>
+          <div class="cfg-cap" style="color:#5aa0ff">🎯 BOT PRE-PUMP · FSM <span class="px" style="font-weight:500">— caza acumulación (criminal-pump)</span></div>
           <div class="gform">
             <div class="gf"><label>Ruptura mínima · %</label><input id="cfg-pump-breakout" type="number" min="0" max="20" step="0.1" class="mono" title="% de ruptura sobre la base para entrar pre-pump. Más BAJO = entra antes (más temprano) pero más ruido; más ALTO = espera confirmación (más tarde, más limpio)." /></div>
             <div class="gf"><label>Volumen mínimo · ×</label><input id="cfg-pump-vol" type="number" min="1" max="20" step="0.5" class="mono" title="Volumen mínimo para confirmar el arranque pre-pump. Más BAJO = más entradas (más basura); más ALTO = solo moves con volumen real (más selectivo)." /></div>
+            <div class="gf"><label>Acelerador ruptura · × volumen</label><input id="cfg-accel" type="number" min="1" max="20" step="0.5" class="mono" title="Spike de volumen que ACELERA la entrada cuando el FSM ya confirmó (recicla el viejo motor velocity, ya no es un bot gainers aparte). Más alto = solo arranques fuertes." /></div>
           </div>
         </div>
 
@@ -800,8 +762,8 @@ DASHBOARD_HTML = r"""<!doctype html>
           <span class="px" id="cfg-msg"></span>
         </div>
         <div class="empty" style="text-align:left;padding:10px 0 0;line-height:1.7">
-          <b>⚡ Gainers · disparo ×volumen</b>: aceleración de volumen que dispara una compra de momentum. Más alto = solo moves fuertes (menos basura).<br>
-          <b>🎯 Pre-pump · ruptura % y volumen ×</b>: los dos gates de la acumulación. <b>Más bajo = entra antes pero más ruido</b> (la data dice que entrar plano sangra); <b>más alto = más selectivo</b> (menos entradas, mejor calidad). Aplican EN VIVO al guardar.<br>
+          <b>🎯 Pre-pump · ruptura % y volumen ×</b>: los dos gates de la acumulación (criminal-pump). <b>Más bajo = entra antes pero más ruido</b> (la data dice que entrar plano sangra); <b>más alto = más selectivo</b> (menos entradas, mejor calidad).<br>
+          <b>Acelerador ruptura · ×volumen</b>: cuánto spike de volumen acelera la entrada tras confirmar el FSM. Aplican EN VIVO al guardar.<br>
           <b>Máx operaciones</b>: tope de posiciones abiertas a la vez. <b>0 = sin límite</b>. Trading real con dinero exige tus API keys + opt-in explícito.</div>
       </div>
 
@@ -923,7 +885,12 @@ DASHBOARD_HTML = r"""<!doctype html>
 
 <script>
 const $ = (id) => document.getElementById(id);
-const fmtK = (n) => "$" + (Number(n)/1000).toFixed(1) + "K";
+// Adaptativo: <$1k = "$NNN", $1k-$1M = "$X.XK", >=$1M = "$X.XM". Antes /1000 fijo
+// mostraba $100 como "$0.1K" (feo) y nunca pasaba a M. Se ajusta al capital real.
+const fmtK = (n) => { const v=Number(n)||0, a=Math.abs(v), s=v<0?"-":"";
+  return a>=1e6 ? s+"$"+(a/1e6).toFixed(1)+"M"
+       : a>=1e3 ? s+"$"+(a/1e3).toFixed(1)+"K"
+       : s+"$"+a.toFixed(0); };
 const clusterColor = (c) => c === "classic" ? "var(--green)" : "var(--purple)";
 // Text formatting: Title Case for clusters/classifications/statuses, UPPER for
 // exchange ids (display only — the raw id is still used for API calls).
@@ -939,7 +906,7 @@ document.querySelectorAll(".nav a[data-view]").forEach(a => {
     document.querySelectorAll(".view").forEach(v => v.classList.add("hidden"));
     activeView = a.dataset.view;
     $("view-" + activeView).classList.remove("hidden");
-    const loaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, gainers:loadGainers, pipeline:loadPipeline, settings:loadSettings};
+    const loaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, pipeline:loadPipeline, settings:loadSettings};
     if (loaders[activeView]) loaders[activeView]();
   });
 });
@@ -956,7 +923,7 @@ function setMode(m){
     loadGrvt();
   } else {
     $("view-" + activeView).classList.remove("hidden");
-    const loaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, gainers:loadGainers, pipeline:loadPipeline, settings:loadSettings};
+    const loaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, pipeline:loadPipeline, settings:loadSettings};
     if (loaders[activeView]) loaders[activeView]();
   }
 }
@@ -979,8 +946,18 @@ function mkScore(s){
 const EQ_H=170, EQ_PAD=8, EQ_W=600;
 function equitySvg(curve){
   const w=600,h=EQ_H,pad=EQ_PAD;
-  const vals=(curve&&curve.length?curve:[{v:0},{v:0}]).map(p=>Number(p.v));
-  const min=Math.min(...vals),max=Math.max(...vals),rng=(max-min)||Math.max(max,1);
+  const raw=(curve&&curve.length?curve:[{v:0},{v:0}]).map(p=>Number(p.v)).filter(v=>Number.isFinite(v));
+  // Descarta puntos basura (glitches de escritura, p.ej. $100 sueltos) que reventaban
+  // el eje Y: un bot con stop de drawdown ~10% no cae a la mitad. < 50% de la mediana
+  // = imposible → fuera del dominio y de la línea.
+  const srt=[...raw].sort((a,b)=>a-b), med=srt.length?srt[srt.length>>1]:0;
+  const flt=med>0?raw.filter(v=>v>=med*0.5):raw;
+  const vals=flt.length?flt:(raw.length?raw:[0,0]);
+  let min=Math.min(...vals),max=Math.max(...vals);
+  // Curva plana (sin movimiento) → banda ±2% alrededor del capital para que la línea
+  // se centre y los ejes lean acorde al capital, no pegada al piso con todo en $1.0K.
+  if(max===min){ const c=max||1; min=c*0.98; max=c*1.02; }
+  const rng=(max-min)||1;
   const n=vals.length;
   const x=i=>n<2?w/2:(i/(n-1))*(w-pad*2)+pad;
   const y=v=>h-pad-((v-min)/rng)*(h-pad*2);
@@ -1071,8 +1048,18 @@ function renderBookSplit(books){
       <div class="bmeta">${(b&&b.open)||0} abiertas · ${(b&&b.trades)||0} cerradas</div>
     </div>`;
   };
-  el.innerHTML = card('Pre-pump','detecta antes',books.prepump)
-              + card('Gainers','momentum',books.gainers);
+  // Gainers (momentum) retirado: el motor velocity se recicló como acelerador del
+  // FSM, ya no es un book separado. La estrategia activa es SOLO pre-pump (criminal
+  // pump). Una sola card a todo el ancho con realizado + no-realizado.
+  const b=books.prepump||{};
+  const real=(b.pnl!=null)?b.pnl:0, unre=(b.unrealized!=null)?b.unrealized:0;
+  const rc=real>0?'var(--green)':real<0?'var(--red)':'var(--muted-2)';
+  const uc=unre>0?'var(--green)':unre<0?'var(--red)':'var(--muted-2)';
+  el.innerHTML = `<div class="bcard" style="grid-column:1/-1">
+      <div class="bname">Pre-pump<span class="bsub">estrategia activa · detecta antes</span></div>
+      <div class="bpnl mono" style="color:${rc}">${real>=0?'+':'-'}$${Math.abs(real).toFixed(2)}</div>
+      <div class="bmeta">${(b.open)||0} abiertas · ${(b.trades)||0} cerradas · no realizado <span style="color:${uc}">${unre>=0?'+':'-'}$${Math.abs(unre).toFixed(2)}</span></div>
+    </div>`;
 }
 async function loadOverview(){
   let d; try{ d=await (await fetch("/overview")).json(); }catch(e){ return; }
@@ -1510,65 +1497,15 @@ async function reportMissed(){
   catch(e){ $("lrn-missed-btn").textContent="Error"; }
   setTimeout(()=>{$("lrn-missed-btn").textContent="Report missed pump";},1500);
 }
-async function loadGainers(){
-  let m,o; try{ m=await (await fetch("/managed")).json(); o=await (await fetch("/overview")).json(); }catch(e){ return; }
-  const g=(o.books&&o.books.gainers)||{realized:0,unrealized:0,open:0,trades:0,pnl:0};
-  const sgn=v=>(v>=0?'+':'-')+'$'+Math.abs(v||0).toFixed(2);
-  const col=v=>v>0?'var(--green)':v<0?'var(--red)':'var(--muted-2)';
-  $("g-pnl").textContent=sgn(g.pnl); $("g-pnl").style.color=col(g.pnl);
-  $("g-real").textContent=sgn(g.realized); $("g-real").style.color=col(g.realized);
-  $("g-unreal").textContent=sgn(g.unrealized); $("g-unreal").style.color=col(g.unrealized);
-  $("g-open").textContent=g.open||0; $("g-trades").textContent=g.trades||0;
-  try{ const cfg=await (await fetch("/settings")).json();
-    $("g-engine").innerHTML = cfg.velocity_autoentry
-      ? '<span style="color:var(--green)">velocity ACTIVA · '+cfg.velocity_accel_factor+'x</span>'
-      : '<span style="color:var(--muted)">velocity apagada</span>'; }catch(e){}
-  // Velocity hot-list: qué vigila el motor + aceleración actual (da sentido a la
-  // vista aunque no haya entradas: muestra que está cazando, esperando el 3x).
-  try{
-    const v=await (await fetch("/velocity")).json();
-    const w=(v.watching||[]).slice().sort((a,b)=>(b.last_accel||0)-(a.last_accel||0));
-    $("g-vel-meta").textContent=`${v.timeframe||'1m'} · disparo ${v.accel_factor}x · ${w.length}/${v.watch_top_n||8}`;
-    $("g-watch").innerHTML = w.length ? w.map(e=>{
-      const a=e.last_accel||0, hot=a>=(v.accel_factor||4)*0.6;
-      const col=a>=(v.accel_factor||4)?'var(--green)':hot?'var(--amber,#e8aa3c)':'var(--muted-2)';
-      return `<div class="gwatch-row"><span class="sym">${e.symbol} <span class="px">${upx(e.exchange)}</span></span>
-        <span class="gwatch-accel mono" style="color:${col}">${a.toFixed(1)}x</span></div>`;
-    }).join("") : `<div class="empty" style="padding:18px 0">Sin símbolos calientes ahora · el motor recarga la lista cada scan</div>`;
-  }catch(e){ $("g-watch").innerHTML=`<div class="empty" style="padding:18px 0">—</div>`; }
-  const gOpen=(m.open||[]).filter(x=>x.book==='gainers');
-  $("g-charts-count").textContent=gOpen.length+" abiertas";
-  const gkey=gOpen.map(x=>x.exchange+":"+x.symbol).sort().join("|");
-  if(gkey!==window._gChartKey){
-    window._gChartKey=gkey;
-    $("g-charts").innerHTML=gOpen.length ? gOpen.map(x=>{
-      const tv=tvSymbol(x.exchange,x.symbol), up=x.gain_pct>=0;
-      return `<div style="border:1px solid var(--border-soft);border-radius:10px;overflow:hidden">
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px">
-          <span class="sym">${x.symbol} <span class="px">${upx(x.exchange)}</span> <span class="bookbadge bb-g">GAINERS</span></span>
-          <span style="display:flex;align-items:center;gap:8px">
-          <span class="mono px" style="color:${up?'var(--green)':'var(--red)'}" data-gpnl="${x.exchange}:${x.symbol}">${up?'+':''}${x.gain_pct}% · ${x.unrealized_pnl>=0?'+':''}${x.unrealized_pnl}</span>
-          <button class="closebtn" title="Cerrar posición" onclick="closePos('${x.exchange}','${x.symbol}')">✕</button></span></div>
-        ${tvEmbed(tv,190,{mini:true})}</div>`;
-    }).join("") : `<div class="empty">Sin gainers abiertos · aparecen cuando velocity compra momentum</div>`;
-  } else {
-    gOpen.forEach(x=>{ const el=document.querySelector(`[data-gpnl="${x.exchange}:${x.symbol}"]`); if(el){ const up=x.gain_pct>=0; el.style.color=up?'var(--green)':'var(--red)'; el.textContent=(up?'+':'')+x.gain_pct+'% · '+(x.unrealized_pnl>=0?'+':'')+x.unrealized_pnl; }});
-  }
-  const gExits=(m.exits||[]).filter(e=>e.book==='gainers');
-  $("g-exit-count").textContent=gExits.length;
-  $("g-exits").innerHTML=gExits.length ? gExits.map(e=>
-    `<tr><td class="sym">${e.symbol}</td><td><span class="px">${e.reason}</span></td><td class="mono">${Math.round(e.fraction*100)}%</td>
-     <td class="mono">${e.price}</td><td class="mono" style="color:${e.pnl>=0?'var(--green)':'var(--red)'}">${e.pnl>=0?'+':''}${e.pnl}</td></tr>`
-  ).join("") : `<tr><td colspan="5" class="empty">Sin salidas de gainers todavía</td></tr>`;
-  $("g-ts").textContent=new Date().toLocaleTimeString();
-}
+// loadGainers retirado: vista Gainers eliminada (momentum no es la tesis; el motor
+// velocity vive como acelerador del FSM pre-pump).
 async function closePos(ex, sym){
   if(!confirm(`¿Cerrar ${sym} (${ex}) ahora a precio de mercado?`)) return;
   try{
     const r=await fetch("/managed/close",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({symbol:sym, exchange:ex})});
     const d=await r.json();
-    if(d.count){ loadTrades(); loadGainers&&loadGainers(); }
+    if(d.count){ loadTrades(); }
     else alert("No se cerró (¿ya estaba cerrada?)");
   }catch(e){ alert("Error al cerrar: "+e); }
 }
@@ -1714,10 +1651,6 @@ async function loadSettings(){
     $("cfg-accel").value=cfg.gainers_accel ?? cfg.velocity_accel_factor;
     $("cfg-pump-breakout").value=cfg.pump_breakout_pct;
     $("cfg-pump-vol").value=cfg.pump_vol_spike;
-    const ve=cfg.velocity_autoentry;
-    $("cfg-gainers").innerHTML = ve
-      ? '<span style="color:var(--green)">ACTIVA · compra momentum</span>'
-      : '<span style="color:var(--muted)">apagada (solo alerta)</span>';
   }catch(e){}
   loadTelegram();
 }
@@ -2179,9 +2112,10 @@ loadMe();
 (function(){ const s=$("tok-search"); if(s) s.addEventListener("input", filterTokens); })();
 
 // ---- boot + active-view polling ----
-const viewLoaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, gainers:loadGainers, pipeline:loadPipeline, settings:loadSettings, grvt:loadGrvt};
+const viewLoaders = {pump:loadOverview, tokens:loadTokens, alerts:loadAlerts, learning:loadLearning, trades:loadTrades, pipeline:loadPipeline, settings:loadSettings, grvt:loadGrvt};
 loadOverview();
 setInterval(()=>{ const fn=viewLoaders[activeView]; if(fn) fn(); }, 15000);
+
 </script>
 </body>
 </html>

@@ -7,14 +7,50 @@ live from the Settings UI (/telegram/config), which also persists them to .env.
 from __future__ import annotations
 
 import html
+import itertools
 import logging
 import os
+import re
 import time
+from collections import deque
 from pathlib import Path
 
 import httpx
 
 logger = logging.getLogger("pump-reader.notify")
+
+# --- IN-APP notification feed (paridad con Telegram) --------------------------
+# Cada notificación que va a Telegram se ESPEJA aquí para que la app la muestre
+# también (campana + panel + Notification API del navegador). Misma fuente → no
+# divergen. Ring buffer en memoria; el dashboard hace poll de /notifications.
+_FEED: deque[dict] = deque(maxlen=250)
+_feed_seq = itertools.count(1)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_html(s: str) -> str:
+    return html.unescape(_TAG_RE.sub("", s or "")).strip()
+
+
+def push_feed(kind: str, text: str) -> None:
+    """Añade una entrada al feed in-app. kind: alert|entry|exit|system|grid."""
+    try:
+        _FEED.append({
+            "id": next(_feed_seq), "ts": time.time(),
+            "kind": kind, "text": _strip_html(text)[:600],
+        })
+    except Exception:  # noqa: BLE001 - el feed nunca debe tumbar el envío
+        pass
+
+
+def feed_since(since: int = 0, limit: int = 60) -> dict:
+    """Entradas posteriores a `since` (id) + el último id + total (para la campana)."""
+    items = [e for e in _FEED if e["id"] > since]
+    return {
+        "items": items[-limit:],
+        "latest": (_FEED[-1]["id"] if _FEED else 0),
+        "total": len(_FEED),
+    }
 
 # repo-root .env (dev: app/ -> pump-reader/ -> apps/ -> repo root). In Docker the
 # tree is shallower (/app/app/notify.py) so a fixed parents[3] IndexErrors — walk
@@ -242,6 +278,7 @@ _last_error_at: dict[str, float] = {}
 
 async def send_system(text: str) -> bool:
     # System notices go to the error/system group when one is configured.
+    push_feed("system", text)
     return await send_telegram(
         f"⚙️ <b>TradeOS AI · Sistema</b>\n{text}", chat_id=_error_chat()
     )
@@ -266,6 +303,7 @@ async def send_error(where: str, detail: str) -> bool:
 
 
 async def send_grid(text: str) -> bool:
+    push_feed("grid", text)
     return await send_telegram(f"📊 <b>Grid Bot</b>\n{text}")
 
 
@@ -355,6 +393,7 @@ _CAUSA_ES = {
     "timeout": "TIME_OUT",
     "break_even": "BREAK_EVEN",
     "tp1": "TAKE_PROFIT",
+    "vol_fade": "VOL_FADE",
 }
 
 
@@ -401,14 +440,17 @@ def format_arbitrage(symbol: str, lo_ex: str, lo_px: float, hi_ex: str,
 # Convenience senders (HTML formatting).
 
 async def send_entry(text: str) -> bool:
+    push_feed("entry", text)
     return await send_telegram(text)
 
 
 async def send_exit(text: str) -> bool:
+    push_feed("exit", text)
     return await send_telegram(text)
 
 
 async def send_alert(text: str) -> bool:
+    push_feed("alert", text)
     return await send_telegram(text)
 
 

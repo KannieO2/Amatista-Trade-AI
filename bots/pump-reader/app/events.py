@@ -42,6 +42,7 @@ EXIT_REASON_EVENT = {
     "break_even": EventType.BREAK_EVEN_TRIGGER,
     "trailing": EventType.TRAILING_TRIGGER,
     "timeout": EventType.TIME_STOP_TRIGGER,
+    "vol_fade": EventType.TIME_STOP_TRIGGER,
 }
 
 

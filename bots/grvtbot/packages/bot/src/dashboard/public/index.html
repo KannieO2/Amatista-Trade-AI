@@ -1,0 +1,2319 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GRVT Grid Bot Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* Premium Dark Theme with Glassmorphism */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #0a0e14 0%, #0d1117 100%);
+            color: #e6edf3;
+            line-height: 1.6;
+            min-height: 100vh;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        @keyframes glow {
+            0%, 100% { box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3); }
+            50% { box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.6); }
+        }
+
+        /* Hero Header */
+        .header {
+            background: linear-gradient(135deg, rgba(18, 23, 30, 0.95) 0%, rgba(13, 17, 23, 0.98) 100%);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(56, 68, 84, 0.3);
+            padding: 32px 24px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(0, 212, 170, 0.5), transparent);
+        }
+
+        .header h1 {
+            color: #e6edf3;
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, #e6edf3, #58a6ff);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-live {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(0, 212, 170, 0.1);
+            border: 1px solid rgba(0, 212, 170, 0.3);
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+            color: #00d4aa;
+            margin-bottom: 32px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #00d4aa;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 24px;
+            margin-bottom: 40px;
+            padding: 0 24px;
+        }
+
+        .stat-card {
+            background: rgba(22, 27, 34, 0.8);
+            border: 1px solid rgba(56, 68, 84, 0.3);
+            border-radius: 16px;
+            padding: 24px;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+            transition: all 0.2s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.5), transparent);
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(56, 68, 84, 0.5);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .stat-card:hover::before {
+            opacity: 1;
+        }
+
+        .stat-emoji {
+            font-size: 28px;
+            margin-bottom: 12px;
+            display: block;
+        }
+
+        .stat-label {
+            color: #7d8590;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-value {
+            font-size: 36px;
+            font-weight: 700;
+            line-height: 1;
+            transition: all 0.2s ease;
+        }
+
+        .stat-positive { 
+            color: #00d4aa;
+            text-shadow: 0 0 20px rgba(0, 212, 170, 0.3);
+        }
+        .stat-negative { 
+            color: #ff4757;
+            text-shadow: 0 0 20px rgba(255, 71, 87, 0.3);
+        }
+        .stat-neutral { 
+            color: #3b82f6;
+            text-shadow: 0 0 20px rgba(59, 130, 246, 0.3);
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 24px 40px;
+        }
+
+        .section {
+            background: rgba(22, 27, 34, 0.8);
+            border: 1px solid rgba(56, 68, 84, 0.3);
+            border-radius: 16px;
+            margin-bottom: 32px;
+            overflow: hidden;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+            transition: all 0.2s ease;
+        }
+
+        .section:hover {
+            border-color: rgba(56, 68, 84, 0.4);
+        }
+
+        .section-header {
+            padding: 24px 32px;
+            border-bottom: 1px solid rgba(56, 68, 84, 0.2);
+            background: linear-gradient(135deg, rgba(13, 17, 23, 0.8), rgba(18, 23, 30, 0.6));
+        }
+
+        .section-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #e6edf3;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .section-subtitle {
+            color: #7d8590;
+            font-size: 14px;
+            font-weight: 400;
+        }
+
+        .section-content {
+            padding: 32px;
+        }
+
+        /* Premium Form Styling */
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 32px;
+            margin-bottom: 32px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            color: #e6edf3;
+            font-weight: 500;
+            margin-bottom: 8px;
+            font-size: 14px;
+            letter-spacing: 0.25px;
+        }
+
+        .form-input, .form-select {
+            width: 100%;
+            padding: 12px 16px;
+            background: rgba(10, 14, 20, 0.8);
+            border: 1px solid rgba(56, 68, 84, 0.3);
+            border-radius: 12px;
+            color: #e6edf3;
+            font-size: 14px;
+            font-weight: 400;
+            transition: all 0.2s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .form-input:focus, .form-select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            background: rgba(10, 14, 20, 0.95);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+            animation: glow 2s ease-in-out infinite;
+        }
+
+        .form-input:hover, .form-select:hover {
+            border-color: rgba(56, 68, 84, 0.5);
+        }
+
+        .form-range {
+            width: 100%;
+            margin: 12px 0;
+            -webkit-appearance: none;
+            appearance: none;
+            height: 6px;
+            background: linear-gradient(90deg, rgba(59, 130, 246, 0.3), rgba(0, 212, 170, 0.3));
+            border-radius: 3px;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+
+        .form-range::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: linear-gradient(135deg, #3b82f6, #00d4aa);
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid #fff;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            transition: all 0.2s ease;
+        }
+
+        .form-range::-webkit-slider-thumb:hover {
+            transform: scale(1.1);
+            box-shadow: 0 4px 16px rgba(59, 130, 246, 0.4);
+        }
+
+        .range-info {
+            display: flex;
+            justify-content: space-between;
+            color: #7d8590;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .preview-box {
+            background: linear-gradient(135deg, rgba(10, 14, 20, 0.9), rgba(13, 17, 23, 0.8));
+            border: 1px solid rgba(0, 212, 170, 0.3);
+            border-radius: 16px;
+            padding: 24px;
+            margin-top: 24px;
+            backdrop-filter: blur(10px);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .preview-box::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #00d4aa, transparent);
+        }
+
+        .preview-title {
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: #00d4aa;
+            font-size: 16px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .preview-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        .preview-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(56, 68, 84, 0.1);
+        }
+
+        .preview-item:last-child {
+            border-bottom: none;
+        }
+
+        .preview-item span:first-child {
+            color: #7d8590;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .preview-item span:last-child {
+            color: #e6edf3;
+            font-weight: 600;
+        }
+
+        /* Premium Buttons */
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+            overflow: hidden;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+            transition: left 0.5s ease;
+        }
+
+        .btn:hover::before {
+            left: 100%;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #00d4aa, #00b894);
+            color: #fff;
+            border: 1px solid rgba(0, 212, 170, 0.3);
+            box-shadow: 0 4px 16px rgba(0, 212, 170, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0, 212, 170, 0.4);
+            background: linear-gradient(135deg, #00b894, #00a085);
+        }
+
+        .btn-primary:disabled {
+            background: linear-gradient(135deg, #4a5568, #2d3748);
+            color: #7d8590;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(59, 130, 246, 0.1));
+            color: #3b82f6;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .btn-secondary:hover {
+            transform: translateY(-2px);
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.3), rgba(59, 130, 246, 0.2));
+            box-shadow: 0 4px 16px rgba(59, 130, 246, 0.2);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #ff4757, #ff3742);
+            color: #fff;
+            border: 1px solid rgba(255, 71, 87, 0.3);
+            box-shadow: 0 4px 16px rgba(255, 71, 87, 0.3);
+        }
+
+        .btn-danger:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(255, 71, 87, 0.4);
+            background: linear-gradient(135deg, #ff3742, #ff2433);
+        }
+
+        .btn-small {
+            padding: 8px 16px;
+            font-size: 12px;
+            border-radius: 8px;
+        }
+
+        /* Enhanced Bot Cards */
+        .bots-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 24px;
+        }
+
+        .bot-card {
+            background: rgba(10, 14, 20, 0.8);
+            border: 1px solid rgba(56, 68, 84, 0.3);
+            border-radius: 16px;
+            padding: 24px;
+            transition: all 0.2s ease;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .bot-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #3b82f6, #00d4aa);
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+
+        .bot-card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(56, 68, 84, 0.5);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .bot-card:hover::before {
+            opacity: 1;
+        }
+
+        .bot-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid rgba(56, 68, 84, 0.2);
+        }
+
+        .bot-title {
+            font-weight: 600;
+            font-size: 18px;
+            color: #e6edf3;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .bot-status {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .status-running {
+            background: rgba(0, 212, 170, 0.2);
+            color: #00d4aa;
+            border: 1px solid rgba(0, 212, 170, 0.3);
+        }
+
+        .status-running::before {
+            content: '';
+            width: 6px;
+            height: 6px;
+            background: #00d4aa;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .status-paused {
+            background: rgba(255, 166, 87, 0.2);
+            color: #ffa657;
+            border: 1px solid rgba(255, 166, 87, 0.3);
+        }
+
+        .status-stopped {
+            background: rgba(255, 71, 87, 0.2);
+            color: #ff4757;
+            border: 1px solid rgba(255, 71, 87, 0.3);
+        }
+
+        .bot-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .bot-info-item {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            padding: 8px 0;
+        }
+
+        .bot-info-item span:first-child {
+            color: #7d8590;
+            font-weight: 500;
+        }
+
+        .bot-info-item span:last-child {
+            color: #e6edf3;
+            font-weight: 600;
+        }
+
+        .bot-actions {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        /* Enhanced Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(4px);
+            z-index: 1000;
+            animation: modalFadeIn 0.2s ease-out;
+        }
+
+        @keyframes modalFadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .modal.show {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .modal-content {
+            background: rgba(22, 27, 34, 0.95);
+            border: 1px solid rgba(56, 68, 84, 0.4);
+            border-radius: 20px;
+            padding: 32px;
+            max-width: 900px;
+            max-height: 80vh;
+            overflow-y: auto;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            position: relative;
+        }
+
+        .modal-content::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #3b82f6, #00d4aa);
+            border-radius: 20px 20px 0 0;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 32px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid rgba(56, 68, 84, 0.2);
+        }
+
+        .modal-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #e6edf3;
+        }
+
+        .btn-close {
+            background: rgba(255, 71, 87, 0.1);
+            border: 1px solid rgba(255, 71, 87, 0.3);
+            border-radius: 8px;
+            padding: 8px;
+            color: #ff4757;
+            font-size: 18px;
+            cursor: pointer;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+
+        .btn-close:hover {
+            background: rgba(255, 71, 87, 0.2);
+            transform: scale(1.05);
+        }
+
+        /* Enhanced Tabs */
+        .tabs {
+            border-bottom: 1px solid rgba(56, 68, 84, 0.3);
+            margin-bottom: 32px;
+        }
+
+        .tab-buttons {
+            display: flex;
+            gap: 4px;
+        }
+
+        .tab-button {
+            padding: 12px 20px;
+            background: none;
+            border: none;
+            color: #7d8590;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            border-radius: 8px 8px 0 0;
+            position: relative;
+        }
+
+        .tab-button:hover {
+            color: #e6edf3;
+            background: rgba(56, 68, 84, 0.1);
+        }
+
+        .tab-button.active {
+            color: #00d4aa;
+            border-bottom-color: #00d4aa;
+            background: rgba(0, 212, 170, 0.05);
+        }
+
+        .tab-content {
+            display: none;
+            animation: tabFadeIn 0.2s ease-out;
+        }
+
+        @keyframes tabFadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Enhanced Tables */
+        .table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+        }
+
+        .table th,
+        .table td {
+            padding: 16px;
+            text-align: left;
+            border-bottom: 1px solid rgba(56, 68, 84, 0.2);
+        }
+
+        .table th {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(0, 212, 170, 0.05));
+            font-weight: 600;
+            color: #e6edf3;
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 0.5px;
+        }
+
+        .table tr {
+            transition: all 0.2s ease;
+        }
+
+        .table tr:hover {
+            background: rgba(59, 130, 246, 0.05);
+        }
+
+        .table tr:last-child td {
+            border-bottom: none;
+        }
+
+        /* Loading States */
+        .loading {
+            text-align: center;
+            padding: 60px;
+            color: #7d8590;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            border: 3px solid rgba(56, 68, 84, 0.3);
+            border-radius: 50%;
+            border-top-color: #00d4aa;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 40px 24px;
+            color: #7d8590;
+            font-size: 14px;
+            border-top: 1px solid rgba(56, 68, 84, 0.2);
+            background: rgba(10, 14, 20, 0.5);
+            backdrop-filter: blur(10px);
+        }
+
+        .footer-text {
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+
+        .footer-timestamp {
+            font-size: 12px;
+            color: #4a5568;
+        }
+
+        /* Mobile Responsive */
+        @media (max-width: 1024px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 20px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .header {
+                padding: 24px 16px;
+            }
+
+            .header h1 {
+                font-size: 24px;
+            }
+
+            .stats-grid {
+                padding: 0 16px;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 16px;
+            }
+
+            .stat-card {
+                padding: 16px;
+            }
+
+            .stat-value {
+                font-size: 24px;
+            }
+
+            .form-grid {
+                grid-template-columns: 1fr;
+                gap: 24px;
+            }
+
+            .preview-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .container {
+                padding: 0 16px 32px;
+            }
+
+            .section-content {
+                padding: 20px;
+            }
+
+            .bot-actions {
+                justify-content: center;
+            }
+
+            .modal-content {
+                margin: 20px;
+                padding: 24px;
+                max-height: 90vh;
+            }
+
+            .table {
+                display: block;
+                overflow-x: auto;
+                white-space: nowrap;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+                gap: 12px;
+            }
+
+            .bot-info {
+                grid-template-columns: 1fr;
+                gap: 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Hero Header -->
+    <header class="header">
+        <h1>🤖 GRVT Grid Bot Dashboard</h1>
+        <div class="status-live">
+            <div class="status-dot"></div>
+            Live Trading
+        </div>
+    </header>
+
+    <!-- Stats Grid -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <span class="stat-emoji">💰</span>
+            <div class="stat-label">Balance Total</div>
+            <div class="stat-value stat-neutral" id="totalBalance">$0.00</div>
+        </div>
+        <div class="stat-card">
+            <span class="stat-emoji">📈</span>
+            <div class="stat-label">Grid Profit Actual</div>
+            <div class="stat-value stat-positive" id="gridProfit">$0.00</div>
+            <div class="stat-sub" style="font-size:0.75em;color:#888;margin-top:4px;">Total: <span id="gridProfitTotal" class="stat-positive">$0.00</span></div>
+        </div>
+        <div class="stat-card">
+            <span class="stat-emoji">📊</span>
+            <div class="stat-label">Trend PnL</div>
+            <div class="stat-value" id="trendPnl">$0.00</div>
+        </div>
+        <div class="stat-card">
+            <span class="stat-emoji">🎯</span>
+            <div class="stat-label">Total PnL</div>
+            <div class="stat-value" id="totalPnl">$0.00</div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Create Bot Section -->
+        <section class="section">
+            <div class="section-header">
+                <div class="section-title">⚙️ Crear Nuevo Bot</div>
+                <div class="section-subtitle">Configurar estrategia de grid trading (⚠️ Bot se crea PAUSADO)</div>
+            </div>
+            <div class="section-content">
+                <form id="createBotForm">
+                    <div class="form-grid">
+                        <div>
+                            <div class="form-group">
+                                <label class="form-label">Par de Trading</label>
+                                <select class="form-select" id="pair" required>
+                                    <option value="">Seleccionar par</option>
+                                    <option value="BTC_USDT_Perp">BTC/USDT Perpetual</option>
+                                    <option value="ETH_USDT_Perp">ETH/USDT Perpetual</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label">Dirección</label>
+                                <select class="form-select" id="direction" required>
+                                    <option value="">Seleccionar dirección</option>
+                                    <option value="long">Long (Alcista)</option>
+                                    <option value="short">Short (Bajista)</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label">Leverage: <span id="leverageValue">5x</span></label>
+                                <input type="range" class="form-range" id="leverage" min="1" max="20" value="5" step="1">
+                                <div class="range-info">
+                                    <span>1x</span>
+                                    <span>20x</span>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label">Número de Rejillas: <span id="gridsValue">90</span></label>
+                                <input type="number" class="form-input" id="numGrids" min="10" max="95" value="90" step="1" style="width:80px;display:inline-block">
+                                <div class="range-info">
+                                    <span>10</span>
+                                    <span>95</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <div class="form-group">
+                                <label class="form-label">Precio Inferior ($)</label>
+                                <input type="number" class="form-input" id="lowerPrice" placeholder="Ej: 40000" required step="0.01">
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label">Precio Superior ($)</label>
+                                <input type="number" class="form-input" id="upperPrice" placeholder="Ej: 50000" required step="0.01">
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label">Inversión (USDT)</label>
+                                <input type="number" class="form-input" id="investment" placeholder="Ej: 1000" required min="50" step="0.01">
+                            </div>
+
+                            <div class="preview-box">
+                                <div class="preview-title">Preview de la Estrategia</div>
+                                <div class="preview-grid">
+                                    <div class="preview-item">
+                                        <span>Profit/Grid Estimado:</span>
+                                        <span id="profitPerGrid">$0.00</span>
+                                    </div>
+                                    <div class="preview-item">
+                                        <span>Precio de Liquidación:</span>
+                                        <span id="liquidationPrice">$0.00</span>
+                                    </div>
+                                    <div class="preview-item">
+                                        <span>Margen Requerido:</span>
+                                        <span id="requiredMargin">$0.00</span>
+                                    </div>
+                                    <div class="preview-item">
+                                        <span>Cantidad/Grid:</span>
+                                        <span id="quantityPerGrid">0.000</span>
+                                    </div>
+                                    <div class="preview-item">
+                                        <span>Máx Grids Permitidos:</span>
+                                        <span id="maxGridsAllowed" class="stat-neutral">-</span>
+                                    </div>
+                                    <div class="preview-item">
+                                        <span>Inversión/Grid:</span>
+                                        <span id="investmentPerGrid">$0.00</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary" id="createBotBtn">
+                        <span class="spinner" id="createBotSpinner" style="display: none;"></span>
+                        Crear Bot (PAUSADO)
+                    </button>
+                </form>
+            </div>
+        </section>
+
+        <!-- Calculate Max Grids Section -->
+        <section class="section">
+            <div class="section-header">
+                <div class="section-title">📊 Calculadora de Rejillas Máximas</div>
+                <div class="section-subtitle">Calcula el máximo número de rejillas según tu inversión y parámetros</div>
+            </div>
+            <div class="section-content">
+                <div class="form-grid">
+                    <div>
+                        <div class="form-group">
+                            <label class="form-label">Inversión ($USDT)</label>
+                            <input type="number" class="form-input" id="calcInvestment" value="670" min="50" step="10">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Leverage (x)</label>
+                            <input type="number" class="form-input" id="calcLeverage" value="10" min="1" max="20" step="1">
+                        </div>
+                    </div>
+                    <div>
+                        <div class="form-group">
+                            <label class="form-label">Precio Inferior ($)</label>
+                            <input type="number" class="form-input" id="calcLowerPrice" value="1800" min="1" step="0.01">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Precio Superior ($)</label>
+                            <input type="number" class="form-input" id="calcUpperPrice" value="2450" min="1" step="0.01">
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Par de Trading</label>
+                    <select class="form-select" id="calcPair">
+                        <option value="ETH_USDT_Perp">ETH/USDT Perpetual</option>
+                        <option value="BTC_USDT_Perp">BTC/USDT Perpetual</option>
+                    </select>
+                </div>
+                <button type="button" class="btn btn-primary" id="calculateMaxGridsBtn">
+                    <span class="spinner" id="calcSpinner" style="display: none;"></span>
+                    Calcular Máximo
+                </button>
+                <div id="maxGridsResult" style="margin-top: 20px; display: none;">
+                    <div class="alert alert-info">
+                        <h4>📊 Resultado del Cálculo</h4>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;">
+                            <div><strong>Máx. Rejillas:</strong> <span id="resultMaxGrids">-</span></div>
+                            <div><strong>Capital Efectivo:</strong> $<span id="resultCapital">-</span></div>
+                            <div><strong>Costo por Rejilla:</strong> $<span id="resultCostPerGrid">-</span></div>
+                            <div><strong>Spacing:</strong> $<span id="resultSpacing">-</span></div>
+                            <div><strong>Min Qty/Rejilla:</strong> <span id="resultMinQty">-</span></div>
+                            <div><strong>Precio Actual:</strong> $<span id="resultCurrentPrice">-</span></div>
+                        </div>
+                        <div id="gridWarning" style="margin-top: 10px; color: #ff6b6b; display: none;">
+                            ⚠️ <strong>Warning:</strong> El número de rejillas solicitado excede el máximo recomendado.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Active Bots Section -->
+        <section class="section">
+            <div class="section-header">
+                <div class="section-title">🤖 Bots Activos</div>
+                <div class="section-subtitle">Gestión de estrategias de trading</div>
+            </div>
+            <div class="section-content">
+                <div id="botsContainer">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        Cargando bots...
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Bot Detail Modal -->
+    <div class="modal" id="botModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="botModalTitle">Detalles del Bot</h2>
+                <button class="btn-close" onclick="closeBotModal()">×</button>
+            </div>
+
+            <div class="tabs">
+                <div class="tab-buttons">
+                    <button class="tab-button active" data-tab="overview">Resumen</button>
+                    <button class="tab-button" data-tab="orders">Órdenes</button>
+                    <button class="tab-button" data-tab="trades">Transacciones</button>
+                    <button class="tab-button" data-tab="params">Parámetros</button>
+                    <button class="tab-button" data-tab="compound">Compuesto</button>
+                    <button class="tab-button" data-tab="funding">Financiación</button>
+                    <button class="tab-button" data-tab="equity">Curva de Equity</button>
+                </div>
+            </div>
+
+            <div class="tab-content active" id="overview-tab">
+                <div id="botOverview">Cargando resumen...</div>
+            </div>
+
+            <div class="tab-content" id="orders-tab">
+                <div id="botOrders">Cargando órdenes...</div>
+            </div>
+
+            <div class="tab-content" id="trades-tab">
+                <div id="botTrades">Cargando transacciones...</div>
+            </div>
+
+            <div class="tab-content" id="params-tab">
+                <div id="botParams">Cargando parámetros...</div>
+            </div>
+
+            <div class="tab-content" id="compound-tab">
+                <div style="margin-bottom: 20px;">
+                    <h3 style="color: #e6edf3; margin-bottom: 10px;">🔄 Configuración de Compuesto</h3>
+                    <p style="color: #7d8590; font-size: 14px;">Automatiza la reinversión de ganancias</p>
+                </div>
+
+                <!-- STATUS CARD -->
+                <div id="compoundStatus" style="background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <span id="compoundStatusBadge" style="padding: 4px 12px; border-radius: 12px; font-size: 13px; font-weight: 600;">—</span>
+                        <span id="compoundNextRun" style="color: #7d8590; font-size: 13px;">—</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; text-align: center;">
+                        <div>
+                            <div style="color: #7d8590; font-size: 12px;">Reinversión</div>
+                            <div id="compoundPctDisplay" style="color: #e6edf3; font-size: 20px; font-weight: 700;">0%</div>
+                        </div>
+                        <div>
+                            <div style="color: #7d8590; font-size: 12px;">Threshold</div>
+                            <div id="compoundThresholdDisplay" style="color: #e6edf3; font-size: 20px; font-weight: 700;">$50</div>
+                        </div>
+                        <div>
+                            <div style="color: #7d8590; font-size: 12px;">Última ejecución</div>
+                            <div id="lastCompound" style="color: #e6edf3; font-size: 14px; font-weight: 600;">Nunca</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-grid" style="margin-bottom: 20px;">
+                    <div>
+                        <div class="form-group">
+                            <label class="form-label">% a Reinvertir</label>
+                            <input type="number" class="form-input" id="compoundPct" min="0" max="100" step="1" value="0">
+                            <div class="range-info">
+                                <span>0% (Desactivado)</span>
+                                <span>100% (Todo)</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Threshold en USD</label>
+                            <input type="number" class="form-input" id="compoundThreshold" min="10" step="10" value="50">
+                            <div class="range-info">Profit mínimo para activar compuesto</div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="form-group">
+                            <label class="form-label">Intervalo (horas)</label>
+                            <input type="number" class="form-input" id="compoundInterval" min="1" max="168" step="1" value="24">
+                            <div class="range-info">
+                                <span>1h (Frecuente)</span>
+                                <span>168h (Semanal)</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Inversión Original</label>
+                            <div style="color: #e6edf3; font-size: 16px; font-weight: 600; padding: 8px 0;">$<span id="originalInvestment">-</span></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div style="display: flex; gap: 12px;">
+                    <button type="button" class="btn btn-primary" id="saveCompoundBtn">
+                        <span class="spinner" id="compoundSpinner" style="display: none;"></span>
+                        Guardar Configuración
+                    </button>
+                    <button type="button" class="btn" id="executeCompoundBtn" style="background: #238636; color: white; border: 1px solid #2ea043; cursor: pointer; padding: 8px 16px; border-radius: 6px; font-weight: 600;">
+                        ⚡ Ejecutar Ahora
+                    </button>
+                </div>
+            </div>
+
+            <div class="tab-content" id="funding-tab">
+                <div id="botFunding">Cargando historial de funding...</div>
+            </div>
+
+            <div class="tab-content" id="equity-tab">
+                <div style="margin-bottom: 20px;">
+                    <h3 style="color: #e6edf3; margin-bottom: 10px;">📊 Curva de Equity</h3>
+                    <p style="color: #7d8590; font-size: 14px;">Evolución del balance y drawdown a lo largo del tiempo</p>
+                </div>
+                <div id="botEquityCurve">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        Cargando curva de equity...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let bots = [];
+        let prices = {};
+        let balance = {};
+
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeEventListeners();
+            loadDashboardData();
+            
+            // Auto-refresh every 10 seconds
+            setInterval(loadDashboardData, 10000);
+        });
+
+        // Event listeners
+        function initializeEventListeners() {
+            // Form sliders
+            document.getElementById('leverage').addEventListener('input', function() {
+                document.getElementById('leverageValue').textContent = this.value + 'x';
+                updatePreview();
+            });
+
+            document.getElementById('numGrids').addEventListener('input', function() {
+                document.getElementById('gridsValue').textContent = this.value;
+                updatePreview();
+            });
+
+            // Form inputs for preview
+            ['lowerPrice', 'upperPrice', 'investment', 'pair'].forEach(id => {
+                document.getElementById(id).addEventListener('input', updatePreview);
+            });
+
+            // Create bot form
+            document.getElementById('createBotForm').addEventListener('submit', handleCreateBot);
+
+            // Calculate max grids button
+            document.getElementById('calculateMaxGridsBtn').addEventListener('click', handleCalculateMaxGrids);
+
+            // Compound settings button
+            document.getElementById('saveCompoundBtn').addEventListener('click', handleSaveCompound);
+            document.getElementById('executeCompoundBtn').addEventListener('click', async function() {
+                const btn = this;
+                btn.disabled = true;
+                btn.textContent = '⏳ Ejecutando...';
+                try {
+                    const response = await fetch('/api/bots/' + currentBotId + '/compound/execute', { method: 'POST' });
+                    const result = await response.json();
+                    if (result.success) {
+                        alert('✅ Compuesto ejecutado: ' + (result.message || 'OK'));
+                        loadBotCompound(currentBotId);
+                    } else {
+                        alert('⚠️ ' + (result.error || result.message || 'No se pudo ejecutar'));
+                    }
+                } catch (e) {
+                    alert('❌ Error: ' + e.message);
+                }
+                btn.disabled = false;
+                btn.textContent = '⚡ Ejecutar Ahora';
+            });
+
+            // Tab buttons
+            document.querySelectorAll('.tab-button').forEach(button => {
+                button.addEventListener('click', function() {
+                    const tabName = this.dataset.tab;
+                    switchTab(tabName);
+                });
+            });
+        }
+
+        // Load dashboard data
+        async function loadDashboardData() {
+            try {
+                const [balanceRes, pricesRes, botsRes] = await Promise.all([
+                    fetch('/api/balance'),
+                    fetch('/api/prices'),
+                    fetch('/api/bots')
+                ]);
+
+                balance = await balanceRes.json();
+                prices = await pricesRes.json();
+                bots = await botsRes.json();
+
+                updateHeader();
+                updateBotsDisplay();
+                updatePreview();
+
+            } catch (error) {
+                console.error('Error loading dashboard data:', error);
+            }
+        }
+
+        // Update stats cards
+        function updateHeader() {
+            document.getElementById('totalBalance').textContent = `$${balance.totalEquity || '0.00'}`;
+            
+            const totalGridProfit = bots.reduce((sum, bot) => sum + (bot.gridProfit || 0), 0);
+            const totalTrendPnl = bots.reduce((sum, bot) => sum + (bot.trendPnl || 0), 0);
+            const totalPnl = bots.reduce((sum, bot) => sum + (bot.pnl || 0), 0);
+
+            // Grid Profit Actual (since last compound)
+            document.getElementById('gridProfit').textContent = `$${totalGridProfit.toFixed(2)}`;
+            // Grid Profit Total (since original deposit)
+            const totalGridProfitTotal = bots.reduce((sum, bot) => sum + (bot.gridProfitTotal || 0), 0);
+            document.getElementById('gridProfitTotal').textContent = `$${totalGridProfitTotal.toFixed(2)}`;
+
+            // Trend PnL (can be positive or negative)
+            const trendElement = document.getElementById('trendPnl');
+            trendElement.textContent = `$${totalTrendPnl.toFixed(2)}`;
+            trendElement.className = `stat-value ${totalTrendPnl >= 0 ? 'stat-positive' : 'stat-negative'}`;
+
+            // Total PnL
+            const pnlElement = document.getElementById('totalPnl');
+            pnlElement.textContent = `$${totalPnl.toFixed(2)}`;
+            pnlElement.className = `stat-value ${totalPnl >= 0 ? 'stat-positive' : 'stat-negative'}`;
+        }
+
+        // Update bots display
+        function updateBotsDisplay() {
+            const container = document.getElementById('botsContainer');
+            
+            if (bots.length === 0) {
+                container.innerHTML = '<div class="loading">No hay bots creados</div>';
+                return;
+            }
+
+            container.innerHTML = bots.map(bot => `
+                <div class="bot-card">
+                    <div class="bot-header">
+                        <div class="bot-title">${bot.pair} ${bot.direction.toUpperCase()}</div>
+                        <span class="bot-status status-${bot.status}">${bot.status}</span>
+                    </div>
+
+                    <div class="bot-info">
+                        <div class="bot-info-item">
+                            <span>PnL:</span>
+                            <span class="${bot.pnl >= 0 ? 'stat-positive' : 'stat-negative'}">$${bot.pnl.toFixed(2)}</span>
+                        </div>
+                        <div class="bot-info-item">
+                            <span>Leverage:</span>
+                            <span>${bot.leverage}x</span>
+                        </div>
+                        <div class="bot-info-item">
+                            <span>Grid Profit:</span>
+                            <span class="stat-positive">$${bot.gridProfit.toFixed(2)}</span>
+                        </div>
+                        <div class="bot-info-item">
+                            <span>Trend PnL:</span>
+                            <span class="${bot.trendPnl >= 0 ? 'stat-positive' : 'stat-negative'}">$${bot.trendPnl.toFixed(2)}</span>
+                        </div>
+                        <div class="bot-info-item">
+                            <span>Capital Inicial:</span>
+                            <span>$670</span>
+                        </div>
+                        <div class="bot-info-item">
+                            <span>Reinversión:</span>
+                            <span class="stat-positive">+$${(bot.investment - 670).toFixed(2)}</span>
+                        </div>
+                        <div class="bot-info-item">
+                            <span>Inversión Total:</span>
+                            <span style="font-weight: 700;">$${bot.investment.toFixed(2)}</span>
+                        </div>
+                        <div class="bot-info-item">
+                            <span>Estado:</span>
+                            <span>${bot.isActive ? 'Activo' : 'Inactivo'}</span>
+                        </div>
+                    </div>
+
+                    <div class="bot-actions">
+                        ${bot.status === 'paused' ? 
+                            `<button class="btn btn-primary btn-small" onclick="startBot(${bot.id})">Iniciar</button>` :
+                            bot.status === 'running' ?
+                            `<button class="btn btn-secondary btn-small" onclick="pauseBot(${bot.id})">Pausar</button>` :
+                            ''
+                        }
+                        <button class="btn btn-secondary btn-small" onclick="showBotDetails(${bot.id})">Detalles</button>
+                        ${bot.status !== 'stopped' ? 
+                            `<button class="btn btn-danger btn-small" onclick="closeBot(${bot.id})">Cerrar</button>` :
+                            `<button class="btn btn-danger btn-small" onclick="deleteBot(${bot.id})" style="background: #891D1B;">🗑️ Eliminar</button>`
+                        }
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Update strategy preview
+        function updatePreview() {
+            const pair = document.getElementById('pair').value;
+            const lowerPrice = parseFloat(document.getElementById('lowerPrice').value) || 0;
+            const upperPrice = parseFloat(document.getElementById('upperPrice').value) || 0;
+            const investment = parseFloat(document.getElementById('investment').value) || 0;
+            const leverage = parseInt(document.getElementById('leverage').value);
+            const numGrids = parseInt(document.getElementById('numGrids').value);
+
+            // Reset preview if incomplete data
+            if (!pair || !investment) {
+                document.getElementById('profitPerGrid').textContent = '$0.00';
+                document.getElementById('liquidationPrice').textContent = '$0.00';
+                document.getElementById('requiredMargin').textContent = '$0.00';
+                document.getElementById('quantityPerGrid').textContent = '0.000';
+                document.getElementById('maxGridsAllowed').textContent = '-';
+                document.getElementById('investmentPerGrid').textContent = '$0.00';
+                return;
+            }
+
+            // Calculate max grids allowed (FRONTEND implementation)
+            const minNotional = pair === 'ETH_USDT_Perp' ? 20 : 100;
+            const minSize = 0.01; // ETH min quantity
+            const effectiveCapital = investment * leverage;
+            
+            // Considerar tanto min_notional como min_quantity por nivel
+            const avgPrice = (lowerPrice + upperPrice) / 2;
+            const minQuantityConstraint = avgPrice > 0 ? Math.floor(effectiveCapital / (minSize * avgPrice)) : 0;
+            const minNotionalConstraint = Math.floor(effectiveCapital / minNotional);
+            
+            // El máximo real es el menor entre ambas restricciones, pero cap a 95 (GRVT limit)
+            const maxGrids = Math.min(95, Math.max(0, Math.min(minQuantityConstraint, minNotionalConstraint)));
+            const investmentPerGrid = maxGrids > 0 ? investment / maxGrids : 0;
+            
+            document.getElementById('maxGridsAllowed').textContent = maxGrids;
+            document.getElementById('investmentPerGrid').textContent = `$${investmentPerGrid.toFixed(2)}`;
+            
+            // Update grid slider max value
+            const gridSlider = document.getElementById('numGrids');
+            gridSlider.max = maxGrids;
+            
+            // If current numGrids exceeds max, adjust it
+            if (numGrids > maxGrids) {
+                gridSlider.value = maxGrids;
+                document.getElementById('gridsValue').textContent = maxGrids;
+            }
+            
+            // Color code the max grids display
+            const maxGridsElement = document.getElementById('maxGridsAllowed');
+            if (numGrids > maxGrids) {
+                maxGridsElement.className = 'stat-negative';
+            } else if (numGrids === maxGrids) {
+                maxGridsElement.className = 'stat-neutral';
+            } else {
+                maxGridsElement.className = 'stat-positive';
+            }
+
+            // Continue with existing preview calculations
+            if (!lowerPrice || !upperPrice || upperPrice <= lowerPrice) {
+                document.getElementById('profitPerGrid').textContent = '$0.00';
+                document.getElementById('liquidationPrice').textContent = '$0.00';
+                document.getElementById('requiredMargin').textContent = '$0.00';
+                document.getElementById('quantityPerGrid').textContent = '0.000';
+                return;
+            }
+
+            // Get current price
+            const currentPrice = prices[pair.replace('_USDT_Perp', 'USDT')]?.price || 0;
+            if (!currentPrice) return;
+
+            // Calculate preview values
+            const spacing = (upperPrice - lowerPrice) / numGrids;
+            const quantityPerGrid = (investment / numGrids) * leverage / currentPrice;
+            const profitPerGrid = spacing * quantityPerGrid;
+            const requiredMargin = investment / leverage;
+
+            // Approximate liquidation price (simplified)
+            const maintenanceMarginRate = 0.005; // 0.5%
+            const factor = 1 / leverage - maintenanceMarginRate;
+            const liquidationPrice = currentPrice * (1 - factor);
+
+            document.getElementById('profitPerGrid').textContent = `$${profitPerGrid.toFixed(3)}`;
+            document.getElementById('liquidationPrice').textContent = `$${Math.max(0, liquidationPrice).toFixed(2)}`;
+            document.getElementById('requiredMargin').textContent = `$${requiredMargin.toFixed(2)}`;
+            document.getElementById('quantityPerGrid').textContent = quantityPerGrid.toFixed(5);
+        }
+
+        // Handle create bot form
+        async function handleCreateBot(event) {
+            event.preventDefault();
+            
+            const createBtn = document.getElementById('createBotBtn');
+            const spinner = document.getElementById('createBotSpinner');
+            
+            createBtn.disabled = true;
+            spinner.style.display = 'inline-block';
+
+            try {
+                const formData = {
+                    pair: document.getElementById('pair').value,
+                    direction: document.getElementById('direction').value,
+                    leverage: parseInt(document.getElementById('leverage').value),
+                    lowerPrice: parseFloat(document.getElementById('lowerPrice').value),
+                    upperPrice: parseFloat(document.getElementById('upperPrice').value),
+                    numGrids: parseInt(document.getElementById('numGrids').value),
+                    investmentUSDT: parseFloat(document.getElementById('investment').value)
+                };
+
+                const response = await fetch('/api/bots', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert(`✅ Bot creado exitosamente! ID: ${result.botId}`);
+                    document.getElementById('createBotForm').reset();
+                    document.getElementById('leverageValue').textContent = '5x';
+                    document.getElementById('gridsValue').textContent = '130';
+                    updatePreview();
+                    loadDashboardData();
+                } else {
+                    throw new Error(result.error || 'Error creando bot');
+                }
+
+            } catch (error) {
+                alert(`❌ Error: ${error.message}`);
+            } finally {
+                createBtn.disabled = false;
+                spinner.style.display = 'none';
+            }
+        }
+
+        // Calculate max grids
+        async function handleCalculateMaxGrids() {
+            const btn = document.getElementById('calculateMaxGridsBtn');
+            const spinner = document.getElementById('calcSpinner');
+            const result = document.getElementById('maxGridsResult');
+            const warning = document.getElementById('gridWarning');
+
+            btn.disabled = true;
+            spinner.style.display = 'inline-block';
+            result.style.display = 'none';
+            warning.style.display = 'none';
+
+            try {
+                const investment = document.getElementById('calcInvestment').value;
+                const leverage = document.getElementById('calcLeverage').value;
+                const lowerPrice = document.getElementById('calcLowerPrice').value;
+                const upperPrice = document.getElementById('calcUpperPrice').value;
+                const pair = document.getElementById('calcPair').value;
+
+                const response = await fetch(`/api/calculate-max-grids?investment=${investment}&leverage=${leverage}&lowerPrice=${lowerPrice}&upperPrice=${upperPrice}&pair=${pair}`);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Error calculando rejillas máximas');
+                }
+
+                // Update result display
+                document.getElementById('resultMaxGrids').textContent = data.maxGrids;
+                document.getElementById('resultCapital').textContent = data.effectiveCapital;
+                document.getElementById('resultCostPerGrid').textContent = data.costPerGrid;
+                document.getElementById('resultSpacing').textContent = data.spacing;
+                document.getElementById('resultMinQty').textContent = data.minQtyPerGrid;
+                document.getElementById('resultCurrentPrice').textContent = data.currentPrice.toFixed(2);
+
+                result.style.display = 'block';
+
+                // Show warning if requested grids > max
+                const requestedGrids = document.getElementById('numGrids')?.value || 0;
+                if (parseInt(requestedGrids) > data.maxGrids) {
+                    warning.style.display = 'block';
+                }
+
+            } catch (error) {
+                alert(`❌ Error: ${error.message}`);
+            } finally {
+                btn.disabled = false;
+                spinner.style.display = 'none';
+            }
+        }
+
+        // Bot ID (single bot setup)
+        const currentBotId = 42;
+
+        // Save compound settings
+        async function handleSaveCompound() {
+            const btn = document.getElementById('saveCompoundBtn');
+            const spinner = document.getElementById('compoundSpinner');
+
+            btn.disabled = true;
+            spinner.style.display = 'inline-block';
+
+            try {
+                const compound_pct = document.getElementById('compoundPct').value;
+                const compound_threshold_usdt = document.getElementById('compoundThreshold').value;
+                const compound_interval_hours = document.getElementById('compoundInterval').value;
+
+                const response = await fetch(`/api/bots/${currentBotId}/compound`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        compound_pct: parseFloat(compound_pct),
+                        compound_threshold_usdt: parseFloat(compound_threshold_usdt),
+                        compound_interval_hours: parseInt(compound_interval_hours)
+                    })
+                });
+
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result.error || 'Error guardando configuración de compuesto');
+                }
+
+                alert('✅ Configuración de compuesto guardada exitosamente');
+
+            } catch (error) {
+                alert(`❌ Error: ${error.message}`);
+            } finally {
+                btn.disabled = false;
+                spinner.style.display = 'none';
+            }
+        }
+
+        // Bot actions
+        async function startBot(botId) {
+            if (!confirm('¿Iniciar bot? Esto comenzará el trading con dinero real.')) return;
+
+            try {
+                const response = await fetch(`/api/bots/${botId}/start`, { method: 'POST' });
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert('✅ Bot iniciado exitosamente!');
+                    loadDashboardData();
+                } else {
+                    throw new Error(result.error || 'Error iniciando bot');
+                }
+            } catch (error) {
+                alert(`❌ Error: ${error.message}`);
+            }
+        }
+
+        async function pauseBot(botId) {
+            if (!confirm('¿Pausar bot? Se cancelarán todas las órdenes activas.')) return;
+
+            try {
+                const response = await fetch(`/api/bots/${botId}/pause`, { method: 'POST' });
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert('⏸️ Bot pausado exitosamente!');
+                    loadDashboardData();
+                } else {
+                    throw new Error(result.error || 'Error pausando bot');
+                }
+            } catch (error) {
+                alert(`❌ Error: ${error.message}`);
+            }
+        }
+
+        async function closeBot(botId) {
+            if (!confirm('¿Cerrar bot completamente? Se cerrará la posición y no se podrá reactivar.')) return;
+
+            try {
+                const response = await fetch(`/api/bots/${botId}/close`, { method: 'POST' });
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert('🛑 Bot cerrado exitosamente!');
+                    loadDashboardData();
+                } else {
+                    throw new Error(result.error || 'Error cerrando bot');
+                }
+            } catch (error) {
+                alert(`❌ Error: ${error.message}`);
+            }
+        }
+
+        async function deleteBot(botId) {
+            const bot = bots.find(b => b.id === botId);
+            if (!bot) return;
+
+            if (bot.status !== 'stopped') {
+                alert('❌ Error: Solo se pueden eliminar bots que estén en estado STOPPED. Pausá el bot antes de eliminarlo.');
+                return;
+            }
+
+            if (!confirm(`¿ELIMINAR bot ${botId} completamente?\n\nEsta acción NO se puede deshacer. Se eliminará:\n• El bot y su configuración\n• Todos los niveles de grid\n• Historial de órdenes y trades\n\n¿Estás seguro?`)) return;
+
+            try {
+                const response = await fetch(`/api/bots/${botId}/delete`, { method: 'POST' });
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert('🗑️ Bot eliminado exitosamente!');
+                    loadDashboardData();
+                } else {
+                    throw new Error(result.error || 'Error eliminando bot');
+                }
+            } catch (error) {
+                alert(`❌ Error: ${error.message}`);
+            }
+        }
+
+        // Bot details modal
+        function showBotDetails(botId) {
+            const bot = bots.find(b => b.id === botId);
+            if (!bot) return;
+
+            document.getElementById('botModalTitle').textContent = `Bot ${botId} - ${bot.pair} ${bot.direction.toUpperCase()}`;
+            document.getElementById('botModal').classList.add('show');
+            
+            // Load overview tab
+            loadBotOverview(botId);
+        }
+
+        function closeBotModal() {
+            document.getElementById('botModal').classList.remove('show');
+        }
+
+        function switchTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+            document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+
+            // Load tab data
+            const botId = parseInt(document.getElementById('botModalTitle').textContent.match(/Bot (\d+)/)?.[1]);
+            if (botId) {
+                switch (tabName) {
+                    case 'overview':
+                        loadBotOverview(botId);
+                        break;
+                    case 'orders':
+                        loadBotOrders(botId);
+                        break;
+                    case 'trades':
+                        loadBotTrades(botId);
+                        break;
+                    case 'params':
+                        loadBotParams(botId);
+                        break;
+                    case 'compound':
+                        loadBotCompound(botId);
+                        break;
+                    case 'funding':
+                        loadBotFunding(botId);
+                        break;
+                    case 'equity':
+                        loadBotEquityCurve(botId);
+                        break;
+                }
+            }
+        }
+
+        async function loadBotOverview(botId) {
+            const container = document.getElementById('botOverview');
+            container.innerHTML = '<div class="loading"><div class="spinner"></div> Cargando...</div>';
+
+            try {
+                const response = await fetch(`/api/bots/${botId}`);
+                const bot = await response.json();
+
+                container.innerHTML = `
+                    <div class="preview-grid">
+                        <div class="preview-item"><span>Estado:</span> <span class="bot-status status-${bot.status}">${bot.status}</span></div>
+                        <div class="preview-item"><span>PnL Total:</span> <span class="${bot.pnl >= 0 ? 'stat-positive' : 'stat-negative'}">$${bot.pnl.toFixed(2)}</span></div>
+                        <div class="preview-item"><span>Grid Profit:</span> <span class="stat-positive">$${bot.gridProfit.toFixed(2)}</span></div>
+                        <div class="preview-item"><span>Trend PnL:</span> <span class="${bot.trendPnl >= 0 ? 'stat-positive' : 'stat-negative'}">$${bot.trendPnl.toFixed(2)}</span></div>
+                        <div class="preview-item"><span>Posición:</span> <span>${bot.positionSize || 0}</span></div>
+                        <div class="preview-item"><span>Precio Entrada:</span> <span>$${bot.avgEntryPrice || 0}</span></div>
+                    </div>
+                `;
+            } catch (error) {
+                container.innerHTML = `<div style="color: #f85149;">Error cargando datos: ${error.message}</div>`;
+            }
+        }
+
+        async function loadBotOrders(botId) {
+            const container = document.getElementById('botOrders');
+            container.innerHTML = '<div class="loading"><div class="spinner"></div> Cargando órdenes...</div>';
+
+            try {
+                const response = await fetch(`/api/bots/${botId}/orders`);
+                const orders = await response.json();
+
+                if (orders.length === 0) {
+                    container.innerHTML = '<div>No hay órdenes</div>';
+                    return;
+                }
+
+                container.innerHTML = `
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Lado</th>
+                                <th>Cantidad</th>
+                                <th>Precio</th>
+                                <th>Estado</th>
+                                <th>Fecha</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${orders.map(order => `
+                                <tr>
+                                    <td>${order.order_id}</td>
+                                    <td>${order.side}</td>
+                                    <td>${order.quantity}</td>
+                                    <td>$${order.price}</td>
+                                    <td><span class="bot-status status-${order.status}">${order.status}</span></td>
+                                    <td>${new Date(order.created_at).toLocaleString()}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+            } catch (error) {
+                container.innerHTML = `<div style="color: #f85149;">Error cargando órdenes: ${error.message}</div>`;
+            }
+        }
+
+        async function loadBotTrades(botId) {
+            const container = document.getElementById('botTrades');
+            container.innerHTML = '<div class="loading"><div class="spinner"></div> Cargando transacciones...</div>';
+
+            try {
+                const response = await fetch(`/api/bots/${botId}/trades`);
+                const trades = await response.json();
+
+                if (trades.length === 0) {
+                    container.innerHTML = '<div>No hay transacciones</div>';
+                    return;
+                }
+
+                container.innerHTML = `
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Lado</th>
+                                <th>Cantidad</th>
+                                <th>Precio</th>
+                                <th>Fee</th>
+                                <th>PnL</th>
+                                <th>Fecha</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${trades.map(trade => `
+                                <tr>
+                                    <td>${trade.fill_id}</td>
+                                    <td>${trade.side}</td>
+                                    <td>${trade.quantity}</td>
+                                    <td>$${trade.price}</td>
+                                    <td>$${trade.fee}</td>
+                                    <td class="${(trade.pnl_usdt || 0) >= 0 ? 'stat-positive' : 'stat-negative'}">$${(trade.pnl_usdt || 0).toFixed(2)}</td>
+                                    <td>${new Date(trade.created_at).toLocaleString()}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+            } catch (error) {
+                container.innerHTML = `<div style="color: #f85149;">Error cargando transacciones: ${error.message}</div>`;
+            }
+        }
+
+        async function loadBotParams(botId) {
+            const container = document.getElementById('botParams');
+            container.innerHTML = '<div class="loading"><div class="spinner"></div> Cargando parámetros...</div>';
+
+            try {
+                const response = await fetch(`/api/bots/${botId}`);
+                const bot = await response.json();
+
+                container.innerHTML = `
+                    <div class="preview-grid">
+                        <div class="preview-item"><span>Par:</span> <span>${bot.pair}</span></div>
+                        <div class="preview-item"><span>Dirección:</span> <span>${bot.direction}</span></div>
+                        <div class="preview-item"><span>Leverage:</span> <span>${bot.leverage}x</span></div>
+                        <div class="preview-item"><span>Rango:</span> <span>$${bot.lowerPrice} - $${bot.upperPrice}</span></div>
+                        <div class="preview-item"><span>Rejillas:</span> <span>${bot.numGrids}</span></div>
+                        <div class="preview-item"><span>Inversión:</span> <span>$${bot.investment}</span></div>
+                        <div class="preview-item"><span>Spacing:</span> <span>$${bot.spacing}</span></div>
+                        <div class="preview-item"><span>Cantidad/Grid:</span> <span>${bot.quantityPerGrid}</span></div>
+                        <div class="preview-item"><span>Profit/Grid:</span> <span>$${bot.estimatedProfitPerGrid}</span></div>
+                        <div class="preview-item"><span>Liq. Price:</span> <span>$${bot.liquidationPrice}</span></div>
+                    </div>
+
+                    <div style="margin-top: 24px;">
+                        <label class="form-label">Actualizar Leverage:</label>
+                        <div style="display: flex; gap: 12px; align-items: center;">
+                            <input type="range" id="updateLeverage" min="1" max="20" value="${bot.leverage}" style="flex: 1;">
+                            <span id="updateLeverageValue">${bot.leverage}x</span>
+                            <button class="btn btn-primary btn-small" onclick="updateBotLeverage(${botId})">Actualizar</button>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 24px;">
+                        <label class="form-label">Actualizar Rango de Precios:</label>
+                        <div class="form-grid" style="margin-bottom: 12px;">
+                            <div>
+                                <label class="form-label">Precio Inferior ($)</label>
+                                <input type="number" class="form-input" id="newLowerPrice" value="${bot.lowerPrice}" step="0.01" min="1">
+                            </div>
+                            <div>
+                                <label class="form-label">Precio Superior ($)</label>
+                                <input type="number" class="form-input" id="newUpperPrice" value="${bot.upperPrice}" step="0.01" min="1">
+                            </div>
+                        </div>
+                        <div style="margin-bottom: 12px;">
+                            <div id="rangePreview" style="color: #7d8590; font-size: 14px;">
+                                Rango actual: $${bot.lowerPrice} - $${bot.upperPrice}
+                            </div>
+                        </div>
+                        <button class="btn btn-primary btn-small" id="updateRangeBtn" onclick="updateBotRange(${botId})">
+                            <span class="spinner" id="rangeSpinner" style="display: none;"></span>
+                            Actualizar Rango
+                        </button>
+                        <div style="color: #f85149; font-size: 12px; margin-top: 8px;">
+                            ⚠️ Esto cancelará órdenes fuera del nuevo rango y colocará nuevas órdenes
+                        </div>
+                    </div>
+                `;
+
+                // Update leverage slider
+                document.getElementById('updateLeverage').addEventListener('input', function() {
+                    document.getElementById('updateLeverageValue').textContent = this.value + 'x';
+                });
+
+            } catch (error) {
+                container.innerHTML = `<div style="color: #f85149;">Error cargando parámetros: ${error.message}</div>`;
+            }
+        }
+
+        async function loadBotCompound(botId) {
+            try {
+                const response = await fetch(`/api/bots/${botId}`);
+                const bot = await response.json();
+                
+                const pct = bot.compound_pct || 0;
+                const threshold = bot.compound_threshold_usdt || 50;
+                const interval = bot.compound_interval_hours || 24;
+                const lastAt = bot.last_compound_at;
+                
+                // Fill form inputs
+                document.getElementById('compoundPct').value = pct;
+                document.getElementById('compoundThreshold').value = threshold;
+                document.getElementById('compoundInterval').value = interval;
+                document.getElementById('originalInvestment').textContent = (bot.investment_usdt || 0).toFixed(2);
+                
+                // Status card
+                document.getElementById('compoundPctDisplay').textContent = pct + '%';
+                document.getElementById('compoundThresholdDisplay').textContent = '$' + threshold;
+                
+                const badge = document.getElementById('compoundStatusBadge');
+                const nextRun = document.getElementById('compoundNextRun');
+                
+                if (pct > 0) {
+                    badge.textContent = '✅ ACTIVO';
+                    badge.style.background = '#238636';
+                    badge.style.color = 'white';
+                    
+                    if (lastAt) {
+                        const lastDate = new Date(lastAt);
+                        const nextDate = new Date(lastDate.getTime() + interval * 3600000);
+                        const now = new Date();
+                        const hoursLeft = Math.max(0, (nextDate - now) / 3600000);
+                        
+                        document.getElementById('lastCompound').textContent = lastDate.toLocaleString();
+                        
+                        if (hoursLeft > 24) {
+                            nextRun.textContent = '⏰ Próxima: en ' + Math.ceil(hoursLeft / 24) + ' días';
+                        } else if (hoursLeft > 1) {
+                            nextRun.textContent = '⏰ Próxima: en ' + Math.ceil(hoursLeft) + ' horas';
+                        } else {
+                            nextRun.textContent = '⏰ Próxima: pronto';
+                        }
+                    } else {
+                        document.getElementById('lastCompound').textContent = 'Nunca';
+                        nextRun.textContent = '⏰ Próxima: en ' + interval + ' horas';
+                    }
+                } else {
+                    badge.textContent = '⏸️ DESACTIVADO';
+                    badge.style.background = '#30363d';
+                    badge.style.color = '#7d8590';
+                    nextRun.textContent = '';
+                    document.getElementById('lastCompound').textContent = 'N/A';
+                }
+                    
+            } catch (error) {
+                console.error('Error loading compound settings:', error);
+            }
+        }
+
+        async function loadBotFunding(botId) {
+            const container = document.getElementById('botFunding');
+            container.innerHTML = '<div class="loading"><div class="spinner"></div> Cargando historial...</div>';
+
+            try {
+                const response = await fetch(`/api/bots/${botId}/funding`);
+                const funding = await response.json();
+
+                if (funding.length === 0) {
+                    container.innerHTML = '<div>No hay pagos de funding</div>';
+                    return;
+                }
+
+                container.innerHTML = `
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Instrumento</th>
+                                <th>Rate</th>
+                                <th>Payment</th>
+                                <th>Posición</th>
+                                <th>Fecha</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${funding.map(payment => `
+                                <tr>
+                                    <td>${payment.instrument}</td>
+                                    <td>${(payment.funding_rate * 100).toFixed(4)}%</td>
+                                    <td class="${payment.payment_usdt >= 0 ? 'stat-positive' : 'stat-negative'}">$${payment.payment_usdt.toFixed(4)}</td>
+                                    <td>${payment.position_size}</td>
+                                    <td>${new Date(payment.funding_time).toLocaleString()}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+            } catch (error) {
+                container.innerHTML = `<div style="color: #f85149;">Error cargando funding: ${error.message}</div>`;
+            }
+        }
+
+        async function updateBotLeverage(botId) {
+            const newLeverage = document.getElementById('updateLeverage').value;
+            
+            if (!confirm(`¿Actualizar leverage a ${newLeverage}x? Las posiciones existentes no cambiarán.`)) return;
+
+            try {
+                const response = await fetch(`/api/bots/${botId}/leverage`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ leverage: parseInt(newLeverage) })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert('✅ Leverage actualizado exitosamente!');
+                    loadBotParams(botId);
+                } else {
+                    throw new Error(result.error || 'Error actualizando leverage');
+                }
+            } catch (error) {
+                alert(`❌ Error: ${error.message}`);
+            }
+        }
+
+        async function updateBotRange(botId) {
+            const lowerPrice = document.getElementById('newLowerPrice').value;
+            const upperPrice = document.getElementById('newUpperPrice').value;
+            const btn = document.getElementById('updateRangeBtn');
+            const spinner = document.getElementById('rangeSpinner');
+            
+            if (!lowerPrice || !upperPrice || parseFloat(lowerPrice) >= parseFloat(upperPrice)) {
+                alert('❌ Precio inferior debe ser menor que precio superior');
+                return;
+            }
+
+            if (!confirm(`¿Actualizar rango a $${lowerPrice}-$${upperPrice}? Esto cancelará órdenes existentes fuera del rango y colocará nuevas órdenes.`)) return;
+
+            btn.disabled = true;
+            spinner.style.display = 'inline-block';
+
+            try {
+                const response = await fetch(`/api/bots/${botId}/range`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        lowerPrice: parseFloat(lowerPrice),
+                        upperPrice: parseFloat(upperPrice)
+                    })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert('✅ Rango actualizado exitosamente!');
+                    loadBotParams(botId);
+                    loadDashboardData(); // Refresh bots display
+                } else {
+                    throw new Error(result.error || 'Error actualizando rango');
+                }
+            } catch (error) {
+                alert(`❌ Error: ${error.message}`);
+            } finally {
+                btn.disabled = false;
+                spinner.style.display = 'none';
+            }
+        }
+
+        async function loadBotEquityCurve(botId) {
+            const container = document.getElementById('botEquityCurve');
+            container.innerHTML = '<div class="loading"><div class="spinner"></div> Cargando curva de equity...</div>';
+
+            try {
+                const response = await fetch(`/api/equity-curve?botId=${botId}`);
+                const snapshots = await response.json();
+
+                if (!snapshots || snapshots.length === 0) {
+                    container.innerHTML = '<div>No hay datos de equity disponibles. Toma el primer snapshot ejecutando el script de snapshot.</div>';
+                    return;
+                }
+
+                // Create canvas for the chart
+                container.innerHTML = `
+                    <div style="position: relative; height: 400px; width: 100%;">
+                        <canvas id="equityChart" style="background: rgba(22, 27, 34, 0.5); border-radius: 12px;"></canvas>
+                    </div>
+                    <div style="margin-top: 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; text-align: center;">
+                        <div style="padding: 12px; background: rgba(22, 27, 34, 0.8); border-radius: 8px; border: 1px solid rgba(56, 68, 84, 0.3);">
+                            <div style="color: #7d8590; font-size: 12px;">Balance Inicial</div>
+                            <div style="color: #e6edf3; font-weight: 600;">$670.00</div>
+                        </div>
+                        <div style="padding: 12px; background: rgba(22, 27, 34, 0.8); border-radius: 8px; border: 1px solid rgba(56, 68, 84, 0.3);">
+                            <div style="color: #7d8590; font-size: 12px;">Balance Realizado</div>
+                            <div style="color: #00d4aa; font-weight: 600;">$${snapshots[snapshots.length - 1].balance_usdt.toFixed(2)}</div>
+                        </div>
+                        <div style="padding: 12px; background: rgba(22, 27, 34, 0.8); border-radius: 8px; border: 1px solid rgba(56, 68, 84, 0.3);">
+                            <div style="color: #7d8590; font-size: 12px;">Equity Total</div>
+                            <div style="color: #ffd700; font-weight: 600;">$${(snapshots[snapshots.length - 1].equity_usdt || snapshots[snapshots.length - 1].balance_usdt).toFixed(2)}</div>
+                        </div>
+                        <div style="padding: 12px; background: rgba(22, 27, 34, 0.8); border-radius: 8px; border: 1px solid rgba(56, 68, 84, 0.3);">
+                            <div style="color: #7d8590; font-size: 12px;">Return Realizado</div>
+                            <div class="${snapshots[snapshots.length - 1].cumulative_return_pct >= 0 ? 'stat-positive' : 'stat-negative'}">${snapshots[snapshots.length - 1].cumulative_return_pct.toFixed(2)}%</div>
+                        </div>
+                        <div style="padding: 12px; background: rgba(22, 27, 34, 0.8); border-radius: 8px; border: 1px solid rgba(56, 68, 84, 0.3);">
+                            <div style="color: #7d8590; font-size: 12px;">Return Equity</div>
+                            <div style="color: #ffd700; font-weight: 600;">${(snapshots[snapshots.length - 1].equity_return_pct || snapshots[snapshots.length - 1].cumulative_return_pct).toFixed(2)}%</div>
+                        </div>
+                    </div>
+                `;
+
+                // Create the chart
+                const canvas = document.getElementById('equityChart');
+                const ctx = canvas.getContext('2d');
+
+                // Prepare chart data
+                const labels = snapshots.map(s => new Date(s.timestamp).toLocaleDateString('es-ES', { month: 'short', day: 'numeric' }));
+                const balanceData = snapshots.map(s => s.balance_usdt);
+                const equityData = snapshots.map(s => s.equity_usdt || s.balance_usdt);
+
+                new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: 'Balance Realizado (USDT)',
+                                data: balanceData,
+                                borderColor: '#00d4aa',
+                                backgroundColor: 'rgba(0, 212, 170, 0.1)',
+                                borderWidth: 3,
+                                fill: true,
+                                tension: 0.4,
+                                pointBackgroundColor: '#00d4aa',
+                                pointBorderColor: '#ffffff',
+                                pointBorderWidth: 2,
+                                pointRadius: 4,
+                                pointHoverRadius: 6,
+                                yAxisID: 'y'
+                            },
+                            {
+                                label: 'Equity Total (USDT)',
+                                data: equityData,
+                                borderColor: '#ffd700',
+                                backgroundColor: 'rgba(255, 215, 0, 0.05)',
+                                borderWidth: 2,
+                                borderDash: [5, 5],
+                                fill: false,
+                                tension: 0.4,
+                                pointBackgroundColor: '#ffd700',
+                                pointBorderColor: '#ffffff',
+                                pointBorderWidth: 2,
+                                pointRadius: 3,
+                                pointHoverRadius: 5,
+                                yAxisID: 'y'
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: 'Balance Realizado vs Equity Total',
+                                color: '#e6edf3',
+                                font: { size: 16, weight: 'bold' }
+                            },
+                            legend: {
+                                display: true,
+                                position: 'top',
+                                labels: { color: '#e6edf3', font: { size: 12 } }
+                            },
+                            tooltip: {
+                                backgroundColor: 'rgba(22, 27, 34, 0.9)',
+                                titleColor: '#e6edf3',
+                                bodyColor: '#e6edf3',
+                                borderColor: 'rgba(56, 68, 84, 0.3)',
+                                borderWidth: 1,
+                                cornerRadius: 8,
+                                callbacks: {
+                                    title: function(context) {
+                                        return context[0].label;
+                                    },
+                                    label: function(context) {
+                                        if (context.datasetIndex === 0) {
+                                            return `Balance Realizado: $${context.parsed.y.toFixed(2)}`;
+                                        } else {
+                                            return `Equity Total: $${context.parsed.y.toFixed(2)}`;
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                display: true,
+                                title: {
+                                    display: true,
+                                    text: 'Fecha',
+                                    color: '#7d8590'
+                                },
+                                grid: { color: 'rgba(56, 68, 84, 0.2)' },
+                                ticks: { color: '#7d8590' }
+                            },
+                            y: {
+                                type: 'linear',
+                                display: true,
+                                position: 'left',
+                                title: {
+                                    display: true,
+                                    text: 'Balance (USDT)',
+                                    color: '#00d4aa'
+                                },
+                                grid: { color: 'rgba(56, 68, 84, 0.2)' },
+                                ticks: {
+                                    color: '#00d4aa',
+                                    callback: function(value) {
+                                        return '$' + value.toFixed(0);
+                                    }
+                                }
+                            },
+                            y1: {
+                                display: false
+                            }
+                        },
+                        interaction: {
+                            mode: 'index',
+                            intersect: false
+                        },
+                        elements: {
+                            point: {
+                                hoverBackgroundColor: '#ffffff',
+                                hoverBorderColor: '#000000',
+                                hoverBorderWidth: 2
+                            }
+                        }
+                    }
+                });
+
+                console.log(`✅ Loaded ${snapshots.length} snapshots for equity curve`);
+
+            } catch (error) {
+                container.innerHTML = `<div style="color: #f85149;">Error cargando curva de equity: ${error.message}</div>`;
+                console.error('Error loading equity curve:', error);
+            }
+        }
+
+        // Close modal on outside click
+        document.getElementById('botModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeBotModal();
+            }
+        });
+
+        // Update footer timestamp
+        function updateFooterTimestamp() {
+            const timestampElement = document.getElementById('lastUpdate');
+            if (timestampElement) {
+                timestampElement.textContent = new Date().toLocaleString();
+            }
+        }
+
+        // Update footer timestamp every minute
+        setInterval(updateFooterTimestamp, 60000);
+        updateFooterTimestamp(); // Initial update
+    </script>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-text">GRVT Grid Bot v1.0 • Edison × Marta × Manu</div>
+        <div class="footer-timestamp">Last update: <span id="lastUpdate">-</span></div>
+    </footer>
+</body>
+</html>

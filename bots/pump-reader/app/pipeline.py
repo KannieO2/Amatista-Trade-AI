@@ -39,8 +39,13 @@ logger = logging.getLogger("pump-reader.pipeline")
 FSM_MODE = os.getenv("PUMP_FSM_MODE", "enforcing").lower()     # shadow | enforcing
 WINDOW_MIN = int(os.getenv("PUMP_FSM_WINDOW_MIN", "30"))       # ventana de scoring (min)
 MIN_ROWS = int(os.getenv("PUMP_FSM_MIN_ROWS", "8"))           # filas para WATCHLIST→MONITOR
-ACC_MIN = int(os.getenv("PUMP_FSM_ACC_MIN", "55"))           # umbral AccumulationScore
-PERS_MIN = int(os.getenv("PUMP_FSM_PERS_MIN", "60"))         # umbral PersistenceScore
+# Calibrados desde la distribución REAL de scores (1.6M evals): acc p90=46, pers p90=56.
+# Los valores viejos (55/60, y la .env los subió a 65/62) estaban SOBRE el p90 → el gate
+# combinado pasaba 1% → casi nada llegaba a 'confirmation' → 0 entradas. Ahora ~p88: el
+# embudo de detección FLUYE; el gate de ENTRADA real (ruptura vol 4x + forensic + concentración
+# + precio≤$1) es el que protege el capital, no el umbral de detección.
+ACC_MIN = int(os.getenv("PUMP_FSM_ACC_MIN", "45"))           # umbral AccumulationScore (~p88)
+PERS_MIN = int(os.getenv("PUMP_FSM_PERS_MIN", "50"))         # umbral PersistenceScore (~p82)
 RUG_MAX = int(os.getenv("PUMP_FSM_RUG_MAX", "40"))           # techo RugRiskScore
 CONFIRM_TICKS = int(os.getenv("PUMP_FSM_CONFIRM_TICKS", "3")) # ticks sostenidos → ENTRY
 EXPIRE_MIN = int(os.getenv("PUMP_FSM_EXPIRE_MIN", "120"))    # descarta si no confirma

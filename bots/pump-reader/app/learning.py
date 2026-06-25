@@ -44,6 +44,21 @@ FAST_SETTLE_MFE = float(os.getenv("PUMP_LEARN_FAST_SETTLE_MFE", "2"))
 MAX_ACTIVE = int(os.getenv("PUMP_LEARN_MAX_ACTIVE", "120"))
 
 
+def _clean_since() -> "datetime | None":
+    """CLEAN-DATA cutoff. The app's data was MISCONFIGURED up to a point, so its
+    historical outcomes are unreliable and must NOT drive edge/precision/sizing. Set
+    PUMP_DATA_CLEAN_SINCE to an ISO timestamp → everything before it is excluded and the
+    bot re-learns only from correct data forward. Empty = no cutoff (full window)."""
+    v = os.getenv("PUMP_DATA_CLEAN_SINCE", "").strip()
+    if not v:
+        return None
+    try:
+        dt = datetime.fromisoformat(v)
+        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
 def _vol_bucket(v) -> int:
     """Volume-spike tier: 0=<3x, 1=3-6x, 2=>=6x. The measured data says >6x is the
     only historically profitable bucket, so it's the key conditioning variable."""
@@ -254,6 +269,9 @@ class LearningLab:
     # --- metrics -------------------------------------------------------------
     def _in_window(self) -> list[Outcome]:
         cutoff = datetime.now(UTC) - timedelta(days=WINDOW_DAYS)
+        clean = _clean_since()          # exclude the misconfigured-data period entirely
+        if clean and clean > cutoff:
+            cutoff = clean
         return [o for o in self.outcomes if o.alert_at >= cutoff]
 
     def metrics(self) -> dict:
@@ -278,11 +296,30 @@ class LearningLab:
             "n_missed": len(missed),
             "n_dangerous": len(dangerous),
             "precision": round(precision, 3) if precision is not None else None,
+            "precision_bands": self._precision_bands(settled),
             "recall": round(recall, 3) if recall is not None else None,
             "avg_lead_secs": round(avg_lead) if avg_lead is not None else None,
             "components": self._components(settled),
             "proposals": self._proposals(settled, confirmed, precision, avg_lead),
         }
+
+    def _precision_bands(self, settled: list[Outcome]) -> dict:
+        """HONEST precision by MFE band. The single 20% threshold counted a captured
+        +14% move as a total miss → precision read ~4% (the user's '6%' complaint). A
+        criminal-pump that ran +10% IS a profitable, capturable move. Reports the
+        fraction of settled alerts that reached each band so the real edge is visible
+        and can later size the entry by band (P×size). avg_mfe = the typical best move."""
+        n = len(settled)
+        if not n:
+            return {"n": 0, "bands": {}, "avg_mfe": None, "median_mfe": None}
+        mfes = sorted(o.mfe_7d() for o in settled)
+        bands = {}
+        for b in (5.0, 10.0, 20.0):
+            hit = sum(1 for m in mfes if m >= b)
+            bands[f"+{int(b)}%"] = {"precision": round(hit / n, 3), "n": hit}
+        mid = mfes[n // 2] if n % 2 else (mfes[n // 2 - 1] + mfes[n // 2]) / 2
+        return {"n": n, "bands": bands, "avg_mfe": round(mean(mfes), 1),
+                "median_mfe": round(mid, 1)}
 
     def _components(self, settled: list[Outcome]) -> dict:
         out = {}
@@ -384,6 +421,47 @@ class LearningLab:
             if rows:
                 return shrunk(rows)
         return shrunk([])            # no vol-bucket data at all → prior only (~10%)
+
+    def edge_score(self, *, cluster: str, vol_spike: float,
+                   min_n: int | None = None) -> tuple[float, int, dict]:
+        """EdgeScore = MFE esperado (%) del bucket del candidato, de los outcomes REALES
+        del propio bot. NO es P(pump) sola: un +50% raro vale más que un +2% frecuente,
+        así que mide la EXCURSIÓN FAVORABLE media (MFE) — cuánto se mueve a favor el
+        bucket en promedio. Shrunk hacia 0 con K pseudo-muestras (escéptico: sin datos
+        → ~0 edge, nunca sobre-afirma). Los tells peligrosos del mismo bucket cuentan
+        como pseudo-muestras de edge 0 → un perfil scam puntúa más bajo. Rankea/gatea los
+        criminal-pumps que el scanner YA detectó: el patrón es el QUÉ, el EdgeScore el
+        CUÁL/CUÁNTO. Mismo fallback de bucket que pump_probability (cluster+vol → vol).
+        Devuelve (edge_pct, n_muestras, detalle)."""
+        min_n = MIN_SETTLED_FOR_PROPOSAL if min_n is None else min_n
+        win = self._in_window()
+        src = [o for o in win if o.source == "alert" and o.settled and o.signals]
+        vb = _vol_bucket(vol_spike)
+        danger_n = sum(1 for o in win if o.source == "dangerous"
+                       and o.cluster == cluster
+                       and _vol_bucket((o.signals or {}).get("volume_spike")) == vb)
+        K = 6.0   # fuerza de contracción: jala una muestra delgada hacia el prior 0-edge
+
+        def shrunk(rows: list) -> tuple[float, int]:
+            n = len(rows)
+            tot = sum(max(0.0, o.mfe_7d()) for o in rows)
+            return round(tot / (n + danger_n + K), 2), n
+
+        levels = [
+            ("cluster+vol", [o for o in src if o.cluster == cluster
+                             and _vol_bucket(o.signals.get("volume_spike")) == vb]),
+            ("vol", [o for o in src if _vol_bucket(o.signals.get("volume_spike")) == vb]),
+        ]
+        for lvl, rows in levels:
+            if len(rows) >= min_n:
+                e, n = shrunk(rows)
+                return e, n, {"bucket": lvl, "vol_bucket": vb, "danger_n": danger_n}
+        for lvl, rows in levels:           # not enough anywhere → finest non-empty
+            if rows:
+                e, n = shrunk(rows)
+                return e, n, {"bucket": f"{lvl}(thin)", "vol_bucket": vb, "danger_n": danger_n}
+        e, n = shrunk([])                  # no data → prior only (~0 edge)
+        return e, n, {"bucket": "prior", "vol_bucket": vb, "danger_n": danger_n}
 
     @staticmethod
     def _book_of(o: "Outcome") -> str:

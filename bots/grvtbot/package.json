@@ -1,0 +1,30 @@
+{
+  "name": "grvt-grid",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hostable multi-user grid trading bot for GRVT perpetual futures, with real-time dashboard and Telegram alerts.",
+  "license": "AGPL-3.0-or-later",
+  "homepage": "https://grvtbot.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kmanus88/GRVTBot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kmanus88/GRVTBot/issues"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:bot": "npm run dev --workspace=@grvt-grid/bot",
+    "dev:dashboard": "npm run dev --workspace=@grvt-grid/dashboard",
+    "dev:notifier": "npm run dev --workspace=@grvt-grid/notifier",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

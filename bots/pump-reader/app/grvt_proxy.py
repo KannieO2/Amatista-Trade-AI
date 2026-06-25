@@ -75,9 +75,9 @@ _THEME_CSS = """<style id="tradeos-theme">
   --color-border-strong:#33405a!important;
   --color-text-primary:#e6e9ef!important;--color-text-secondary:#b6bdcc!important;
   --color-text-muted:#8b95a7!important;--color-text-disabled:#5a6477!important;
-  --color-primary:#ff2f6e!important;--color-primary-strong:#ff5a86!important;
-  --color-primary-soft:#2a0d17!important;--color-info:#7c6cff!important;
-  --color-chart-1:#7c6cff!important;--color-chart-4:#a78bfa!important;--color-chart-5:#ff2f6e!important;
+  --color-primary:#a05cf2!important;--color-primary-strong:#b985ff!important;
+  --color-primary-soft:#1c1330!important;--color-info:#7c6cff!important;
+  --color-chart-1:#a05cf2!important;--color-chart-4:#c9a6ff!important;--color-chart-5:#7c6cff!important;
 }
 /* light mode — driven by the parent (postMessage / ?theme=light) */
 html.tradeos-light{
@@ -87,8 +87,8 @@ html.tradeos-light{
   --color-border-strong:#c2cad9!important;
   --color-text-primary:#0f1622!important;--color-text-secondary:#2f3a4d!important;
   --color-text-muted:#7a869b!important;--color-text-disabled:#aab3c2!important;
-  --color-primary:#ff2f6e!important;--color-primary-strong:#ff5a86!important;
-  --color-primary-soft:#ffe3ec!important;--color-info:#7c6cff!important;
+  --color-primary:#7d3fc7!important;--color-primary-strong:#a05cf2!important;
+  --color-primary-soft:#efe6fc!important;--color-info:#7c6cff!important;
 }
 html,body,#root{font-family:Geist,system-ui,-apple-system,sans-serif!important}
 html.dark,html.dark body,html.dark #root,:root #root{background:var(--color-bg-base)!important}
@@ -101,6 +101,40 @@ html.tradeos-light,html.tradeos-light body,html.tradeos-light #root{background:#
 #root aside a,#root aside button{font-size:13px!important;font-weight:500!important;
   padding:8px 10px!important;border-radius:8px!important;gap:10px!important;letter-spacing:-.01em!important}
 #root aside a svg,#root aside button svg{width:15px!important;height:15px!important}
+/* active nav item = ScamPump look exactly (purple wash + white text + purple icon) */
+#root aside a[aria-current="page"],#root aside a.active{
+  background:linear-gradient(90deg,rgba(160,92,242,.16),rgba(160,92,242,.02))!important;color:#fff!important}
+#root aside a[aria-current="page"] svg,#root aside a.active svg{color:#a05cf2!important}
+/* Amatista brand header injected at top of the grid sidebar — IGUAL al pump:
+   "Amatista" bold + "TradeOS" muted MISMO tamaño, sin uppercase/spacing/divisoria. */
+#tradeos-grid-brand{display:flex!important;align-items:center;gap:9px;padding:4px 8px 16px;font-size:14px;line-height:1.1}
+#tradeos-grid-brand .gem{width:26px;height:26px;flex:0 0 auto;filter:drop-shadow(0 4px 11px rgba(160,92,242,.6))}
+#tradeos-grid-brand b{font-weight:600;letter-spacing:-.02em;color:var(--color-text-primary)}
+#tradeos-grid-brand span{color:var(--color-text-muted);font-weight:400;margin-left:5px}
+#tradeos-grid-navlabel{font-size:10px;letter-spacing:.14em;color:#4d5666;text-transform:uppercase;padding:14px 8px 6px;font-weight:600}
+/* ===== Animaciones de paridad con el Pump Reader (riseIn + lift + sheen + floaty) ===== */
+@keyframes tos-rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@keyframes tos-floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+@keyframes tos-pulse{50%{box-shadow:0 0 0 5px rgba(160,92,242,.05)}}
+/* tarjetas del grid (.bg-bg-elevated.rounded-lg = Card) = look del pump:
+   entrada escalonada + lift al hover + borde/glow morado + sheen superior */
+#root .bg-bg-elevated.rounded-lg{position:relative;
+  transition:transform .26s cubic-bezier(.16,1,.3,1),box-shadow .26s ease,border-color .26s ease!important;
+  animation:tos-rise .5s cubic-bezier(.16,1,.3,1) both}
+#root .bg-bg-elevated.rounded-lg:hover{transform:translateY(-3px);border-color:rgba(160,92,242,.30)!important;
+  box-shadow:0 32px 64px -28px rgba(0,0,0,.85),0 0 36px -12px rgba(160,92,242,.22)!important}
+#root .bg-bg-elevated.rounded-lg::after{content:"";position:absolute;top:0;left:14px;right:14px;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.26),transparent);pointer-events:none}
+/* entrada escalonada por orden de aparición */
+#root .bg-bg-elevated.rounded-lg:nth-child(2){animation-delay:.05s}
+#root .bg-bg-elevated.rounded-lg:nth-child(3){animation-delay:.10s}
+#root .bg-bg-elevated.rounded-lg:nth-child(4){animation-delay:.16s}
+#root .bg-bg-elevated.rounded-lg:nth-child(5){animation-delay:.22s}
+/* números grandes con glow morado (igual que .kval del pump) */
+#root .text-2xl,#root .text-3xl,#root .text-4xl{text-shadow:0 0 30px rgba(160,92,242,.16)}
+/* gem flotante + dot de estado 'corriendo' pulsante */
+#tradeos-grid-brand .gem{animation:tos-floaty 4s ease-in-out infinite}
+#root .bg-success{animation:tos-pulse 1.8s infinite}
 *{scrollbar-width:none!important;-ms-overflow-style:none!important}
 *::-webkit-scrollbar{width:0!important;height:0!important;display:none!important}
 </style>
@@ -111,6 +145,68 @@ html.tradeos-light,html.tradeos-light body,html.tradeos-light #root{background:#
     if(e && e.data && e.data.tradeosTheme){ apply(e.data.tradeosTheme); }
   });
   try{ var m=String(location.search||'').match(/[?&]theme=(light|dark)/); if(m){ apply(m[1]); } }catch(e){}
+})();
+</script>
+<script id="tradeos-grid-clean">
+/* UNA SOLA CUENTA: el grid usa el SSO de TradeOS → no debe mostrar su propia cuenta/
+   login/logout. Ocultamos la card "Cuenta" (email/rol/Cerrar sesión) del Ajustes y el
+   referral del upstream, sin tocar el build (SPA → MutationObserver). El logout real
+   vive en la barra superior de TradeOS, compartida por ambos bots. */
+(function(){
+  function cardOf(node){ return node && (node.closest('.bg-bg-elevated') || node.closest('.rounded-lg')); }
+  function hideCard(node){ var c=cardOf(node); if(c) c.style.display='none'; }
+  function clean(){
+    try{
+      // 1) ROBUSTO: ocultar la card de cuenta por su ENCABEZADO ("Cuenta"/"Account").
+      // No depende del botón logout (que a veces no rinde) → la card se va siempre.
+      var heads=document.querySelectorAll('h1,h2,h3');
+      for(var j=0;j<heads.length;j++){
+        var ht=(heads[j].textContent||'').trim().toLowerCase();
+        if(ht==='cuenta'||ht==='account'){ hideCard(heads[j]); }
+      }
+      // 2) Respaldo: por el email de la cuenta TradeOS embebido en la card.
+      var all=document.querySelectorAll('#root *');
+      for(var k=0;k<all.length;k++){
+        if(all[k].children.length===0 && /@tradeos\\.local/i.test(all[k].textContent||'')){ hideCard(all[k]); }
+      }
+      // 3) Respaldo: por el botón "Cerrar sesión" si está.
+      var btns=document.querySelectorAll('button');
+      for(var i=0;i<btns.length;i++){
+        var t=(btns[i].textContent||'').trim().toLowerCase();
+        if(t==='cerrar sesión'||t==='cerrar sesion'||t==='log out'||t==='sign out'){ hideCard(btns[i]); }
+      }
+      // 4) Referral del upstream (grvt.io ?ref=...).
+      var ref=document.querySelector('a[href*="ref=R3WLGZS"],a[href*="grvt.io/?ref"]');
+      if(ref){ hideCard(ref); }
+    }catch(e){}
+  }
+  function start(){ clean(); try{ new MutationObserver(clean).observe(document.body,{childList:true,subtree:true}); }catch(e){} }
+  if(document.body) start(); else document.addEventListener('DOMContentLoaded', start);
+})();
+</script>
+<script id="tradeos-grid-brand-inject">
+/* PARIDAD VISUAL: el sidebar del grid debe leerse igual que el del ScamPump
+   (gem Amatista + label de sección). El upstream no trae header de marca → lo
+   inyectamos en el <aside> sin tocar el build. Idempotente (chequea si ya existe). */
+(function(){
+  var GEM='<svg class="gem" viewBox="0 0 24 24"><defs><linearGradient id="amgrid" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e7cdff"/><stop offset="55%" stop-color="#a05cf2"/><stop offset="100%" stop-color="#6a2bb0"/></linearGradient></defs><path d="M6 3.2h12l3.4 5.4L12 21.4 2.6 8.6z" fill="url(#amgrid)" stroke="rgba(255,255,255,.4)" stroke-width=".6" stroke-linejoin="round"/><path d="M6 3.2l6 5.4 6-5.4M2.6 8.6h18.8M12 8.6v12.8" fill="none" stroke="rgba(255,255,255,.5)" stroke-width=".7"/></svg>';
+  function brand(){
+    try{
+      var aside=document.querySelector('#root aside'); if(!aside) return;
+      if(!aside.querySelector('#tradeos-grid-brand')){
+        var b=document.createElement('div'); b.id='tradeos-grid-brand';
+        b.innerHTML=GEM+'<div><b>Amatista</b><span>TradeOS</span></div>';
+        aside.insertBefore(b, aside.firstChild);
+      }
+      var nav=aside.querySelector('nav');
+      if(nav && !aside.querySelector('#tradeos-grid-navlabel')){
+        var l=document.createElement('div'); l.id='tradeos-grid-navlabel'; l.textContent='Grid Bot';
+        nav.parentNode.insertBefore(l, nav);
+      }
+    }catch(e){}
+  }
+  function start(){ brand(); try{ new MutationObserver(brand).observe(document.body,{childList:true,subtree:true}); }catch(e){} }
+  if(document.body) start(); else document.addEventListener('DOMContentLoaded', start);
 })();
 </script>""".encode("utf-8")
 
@@ -126,6 +222,24 @@ async def _proxy_http(request: Request, path: str) -> Response:
     client = _get_client()
     body = await request.body()
     headers = {k: v for k, v in request.headers.items() if k.lower() not in _REQ_STRIP}
+    # AUTH-INJECTION: las llamadas REST del SPA embebido (/grid/api/v2/*) necesitan el
+    # JWT GRVT del usuario, pero el browser a veces NO lo adjunta → 401 "unauthorized"
+    # ("No se pudieron cargar los bots"). Si la llamada no trae su propia Authorization,
+    # inyectamos el token del usuario logueado (lo mintea+cachea main._grid_token_for).
+    # Los endpoints de auth (login/signup) se saltan — ELLOS son el login. Esto vive en
+    # nuestro wrapper, NO toca los internals del grvtbot.
+    # Excluir SOLO login/signup (ESOS son el login, no llevan token). El resto de
+    # /auth/* (p.ej. /auth/me = "¿quién soy?") SÍ necesita el token inyectado.
+    if (_token_provider is not None
+            and path.startswith("api/v2/")
+            and path not in ("api/v2/auth/login", "api/v2/auth/signup")
+            and not any(k.lower() == "authorization" for k in headers)):
+        try:
+            _tok = await _token_provider(request)
+            if _tok:
+                headers["authorization"] = f"Bearer {_tok}"
+        except Exception:  # noqa: BLE001 - inyección best-effort, nunca rompe el proxy
+            logger.debug("grid token inject failed", exc_info=True)
     try:
         upstream = await client.request(
             request.method,
@@ -227,6 +341,24 @@ async def _grid_root() -> RedirectResponse:
     return RedirectResponse("/grid/dashboard/", status_code=307)
 
 
+# Provider que mintea/cachea el JWT GRVT del usuario logueado. main.py lo setea con
+# set_grid_token_provider(_grid_token_for) tras definir la función (evita import circular).
+_token_provider = None  # callable async (request) -> str | None
+
+
+def set_grid_token_provider(fn) -> None:
+    global _token_provider
+    _token_provider = fn
+
+
+async def _proxy_api_v2_root(request: Request, path: str) -> Response:
+    """El SPA del grid se compiló con API base = SAME-ORIGIN → llama /api/v2/* en la
+    RAÍZ del dominio (no bajo /grid/), bypaseando el proxy → 404 "No se pudieron cargar
+    los bots". Lo reencaminamos al backend del grid con el MISMO handler (auth-injection
+    incluida). Pump no expone /api/v2 → sin colisión. No toca internals del grvtbot."""
+    return await _proxy_http(request, f"api/v2/{path}")
+
+
 def register_grvt_proxy(app: FastAPI) -> None:
     """Wire the /grid/* reverse proxy onto the FastAPI app."""
     app.add_api_websocket_route("/grid/ws", _proxy_ws)
@@ -236,3 +368,11 @@ def register_grvt_proxy(app: FastAPI) -> None:
         _proxy_http,
         methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
     )
+    # El SPA llama same-origin /api/v2/* y /ws en la RAÍZ (su build no usa el prefijo
+    # /grid). Reencaminar al backend del grid. Pump no usa /api/v2 ni /ws root.
+    app.add_api_route(
+        "/api/v2/{path:path}",
+        _proxy_api_v2_root,
+        methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+    )
+    app.add_api_websocket_route("/ws", _proxy_ws)

@@ -28,3 +28,8 @@ graphify-out/
 
 # local Claude config
 .claude/
+
+# secrets — Fernet master key (cifra creds GRVT). NUNCA versionar (raíz o bots/grvtbot/)
+master.key
+.env.*
+!.env.example

@@ -256,6 +256,8 @@ class ExecutionEngine:
         order_type: OrderType = OrderType.market,
         open_trades: int | None = None,
         book_depth_usd: float | None = None,
+        daily_loss_usd: float = 0.0,
+        current_drawdown_pct: float = 0.0,
     ) -> ExecutionResult:
         mode = current_mode()
         # Default: trade on the venue(s) where the token actually lists.
@@ -280,6 +282,8 @@ class ExecutionEngine:
                 position_size_usd=per_leg,
                 leverage=1.0,
                 open_trades=base_open + idx,
+                daily_loss_usd=daily_loss_usd,
+                current_drawdown_pct=current_drawdown_pct,
             )
             decision = await self.guard.evaluate(ctx, live=mode == ExecMode.live)
             if not decision.allowed:

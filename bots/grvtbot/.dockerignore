@@ -1,0 +1,30 @@
+# Keep the build context small + reproducible.
+# Anything excluded here is invisible to all docker builds in this repo.
+
+node_modules
+**/node_modules
+dist
+**/dist
+.git
+.gitignore
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+.env.development
+*.log
+**/*.tsbuildinfo
+**/.DS_Store
+.vscode
+.idea
+.cache
+.turbo
+coverage
+**/*.test.ts
+docs
+*.md
+data
+logs
+caddy-data
+caddy-config

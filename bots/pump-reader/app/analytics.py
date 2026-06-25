@@ -47,6 +47,20 @@ def _safe_dt(v) -> datetime | None:
     return None
 
 
+def _clean_since() -> datetime | None:
+    """CLEAN-DATA cutoff. The app's history was MISCONFIGURED up to a point, so older
+    trades are unreliable and must NOT drive sizing/edge. Set PUMP_DATA_CLEAN_SINCE to an
+    ISO timestamp → trades before it are excluded. Empty = no cutoff."""
+    v = os.getenv("PUMP_DATA_CLEAN_SINCE", "").strip()
+    if not v:
+        return None
+    try:
+        dt = datetime.fromisoformat(v)
+        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
 @dataclass
 class TradeRecord:
     trade_id: str
@@ -169,7 +183,7 @@ def quality_score(rec: TradeRecord, entry_grade: str) -> float:
     MAE control, slippage, holding efficiency. Pure, bounded, never throws."""
     try:
         entry_q = {"early_entry": 100, "perfect_entry": 85, "late_entry": 50}.get(entry_grade, 60)
-        exit_q = {"trailing": 95, "break_even": 80, "timeout": 60,
+        exit_q = {"trailing": 95, "break_even": 80, "timeout": 60, "vol_fade": 65,
                   "hard_stop": 25, "dump": 30}.get(rec.exit_reason, 60)
         # MFE capture: how much of the favourable move was banked.
         mfe = rec.mfe_pct if rec.mfe_pct > 0 else 0.0
@@ -242,13 +256,43 @@ class AnalyticsEngine:
     def regime(self) -> str:
         return f"{self.regime_trend}/{self.regime_vol}"
 
-    # --- entry-time (confidence + sizing simulation) ---
+    def _trusted_trades(self) -> list:
+        """Trades from the CLEAN-DATA period only. The app's history was MISCONFIGURED up
+        to a cutoff (PUMP_DATA_CLEAN_SINCE), so older trades must NOT drive sizing/edge.
+        No cutoff set → all trades."""
+        clean = _clean_since()
+        if clean is None:
+            return self.trades
+        out = []
+        for t in self.trades:
+            ts = t.entry_timestamp or t.exit_timestamp
+            if not ts:
+                continue
+            try:
+                dt = datetime.fromisoformat(ts)
+            except (ValueError, TypeError):
+                continue
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            if dt >= clean:
+                out.append(t)
+        return out
+
+    # --- entry-time (confidence + sizing) ---
     def confidence_for(self, setup_type: str, exchange: str) -> float:
         """0-100 confidence from this setup's historical edge. Neutral (60) until
         enough samples exist. Inputs: win rate, profit factor, expectancy sign,
         regime performance. Read-only; used for sizing SIMULATION + stored on trade."""
         try:
-            subset = [t for t in self.trades if t.setup_type == setup_type]
+            # CLEAN-DATA only: never size from the misconfigured-history period.
+            trusted = self._trusted_trades()
+            # Prefer the (setup × venue) bucket — the edge differs sharply by exchange
+            # (bitget PF 2.05 vs binance 0.29). Size flows to the venue that actually
+            # pays. Fall back to setup-only when the venue bucket is too thin to trust.
+            sub_ex = [t for t in trusted
+                      if t.setup_type == setup_type and t.exchange == exchange]
+            subset = (sub_ex if len(sub_ex) >= MIN_SAMPLE
+                      else [t for t in trusted if t.setup_type == setup_type])
             if len(subset) < MIN_SAMPLE:
                 return 60.0
             ex = expectancy_of(subset)

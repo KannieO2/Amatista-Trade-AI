@@ -45,7 +45,7 @@ from .account import real_balances
 from .dashboard import DASHBOARD_HTML
 from .executor import ExecMode, ExecutionEngine, Side, current_mode
 from .grid import GridBot, backtest, fetch_ohlcv_for, fetch_price
-from .grvt_proxy import register_grvt_proxy
+from .grvt_proxy import register_grvt_proxy, set_grid_token_provider
 from .market import market_for_symbol
 from . import notify
 from .notify import format_alert, send_telegram
@@ -450,6 +450,25 @@ async def lifespan(app: FastAPI):
             logger.info("alert prob floor restored: %.2f", ALERT_MIN_PROBABILITY)
     except Exception:
         logger.exception("alert-prob restore failed")
+    # Restore the manually-tuned ENGINE KNOBS (pre-pump breakout/volume gates +
+    # ruptura accelerator) so your Settings calibration survives a restart instead
+    # de volver a los defaults del .env cada boot (leak de calibración).
+    try:
+        global FSM_MIN_BREAKOUT_PCT, FSM_MIN_ENTRY_VOL_SPIKE
+        bsaved = await store.get_state("fsm_min_breakout_pct")
+        if bsaved is not None:
+            FSM_MIN_BREAKOUT_PCT = float(bsaved)
+        vsaved = await store.get_state("fsm_min_entry_vol_spike")
+        if vsaved is not None:
+            FSM_MIN_ENTRY_VOL_SPIKE = float(vsaved)
+        ksaved = await store.get_state("velocity_accel_factor")
+        if ksaved is not None:
+            from . import velocity as _vel
+            _vel.ACCEL_FACTOR = float(ksaved)
+        if any(x is not None for x in (bsaved, vsaved, ksaved)):
+            logger.info("engine knobs restored: breakout=%s vol=%s accel=%s", bsaved, vsaved, ksaved)
+    except Exception:
+        logger.exception("engine-knobs restore failed")
     # Microstructure recorder (FASE 1): inicia el observador y re-siembra su
     # watchlist desde la DB local para no perder pre-historia tras un reinicio.
     global _micro, _forensics, _pipeline
@@ -1538,8 +1557,18 @@ async def _restore_positions() -> None:
         try:
             pts = await store.list_equity(200, user_id=bot.uid)
             if pts:
+                # Filtro de outliers: un bot paper con stop de drawdown ~10% NO puede
+                # caer a la mitad entre puntos. Los $100 sueltos eran glitches de
+                # escritura que reventaban el eje Y del chart. < 50% de la mediana =
+                # imposible → no se rehidrata. (Si todo es basura, deja el crudo.)
+                _vals = sorted(float(p.get("v") or 0) for p in pts if float(p.get("v") or 0) > 0)
+                _med = _vals[len(_vals) // 2] if _vals else 0.0
+                _floor = _med * 0.5
+                _clean = [{"t": p.get("t"), "v": float(p.get("v") or 0)}
+                          for p in pts if float(p.get("v") or 0) >= _floor]
                 bot.equity_history.clear()
-                bot.equity_history.extend({"t": p.get("t"), "v": float(p.get("v") or 0)} for p in pts)
+                bot.equity_history.extend(_clean or [
+                    {"t": p.get("t"), "v": float(p.get("v") or 0)} for p in pts])
         except Exception:
             logger.exception("equity restore failed for %s", bot.uid)
         # Rehydrate REALIZED P&L so the paper balance doesn't reset to the base
@@ -2142,16 +2171,11 @@ def _grid_creds(user: dict) -> tuple[str, str]:
     return email, pw
 
 
-@app.get("/grid-sso")
-async def grid_sso(request: Request):
-    """Single sign-on for the embedded GRVTBot, scoped to the logged-in user.
-
-    The TradeOS login is the only login the user sees. This route logs the
-    session user into the GRVTBot server-side (auto-creating their GRVTBot
-    account on first open) and returns THAT user's JWT, so the iframe SPA boots
-    showing only this person's grids. The derived grid password never reaches
-    the browser. Tokens are cached per user for 12h to avoid the login limiter.
-    """
+async def _grid_token_for(request: Request) -> str | None:
+    """Mint/return the logged-in user's GRVTBot JWT (cached 12h). Shared by /grid-sso
+    AND the /grid proxy's auth-injection, so the embedded SPA is ALWAYS authenticated
+    as this user without the grid login ever showing — incluso si el browser nunca
+    guarda/manda el token. El password derivado nunca llega al browser."""
     import time
 
     user = getattr(request.state, "user", None) or {"id": "owner"}
@@ -2159,11 +2183,11 @@ async def grid_sso(request: Request):
     now = time.time()
     cached = _grid_token_cache.get(uid)
     if cached and (now - cached[1]) < 12 * 3600:
-        return {"ok": True, "key": "grvt-grid-token", "token": cached[0]}
+        return cached[0]
 
     email, password = _grid_creds(user)
     # El grvtbot puede ser un contenedor APARTE (grvtbot:3848) → usar el mismo backend
-    # configurable que el proxy. Hardcodear 127.0.0.1 rompía el SSO en Docker ("grid_offline").
+    # configurable que el proxy. Hardcodear 127.0.0.1 rompía el SSO en Docker.
     backend = f"http://{os.getenv('GRVT_BACKEND_HOST', '127.0.0.1:3848')}"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -2179,17 +2203,31 @@ async def grid_sso(request: Request):
                     json={"email": email, "password": password, "terms_lang": "es"},
                 )
     except httpx.HTTPError:
-        if cached:
-            return {"ok": True, "key": "grvt-grid-token", "token": cached[0], "cached": True}
-        return JSONResponse({"ok": False, "error": "grid_offline"}, status_code=502)
+        return cached[0] if cached else None
 
     if resp.status_code == 200:
         token = resp.json().get("token")
-        _grid_token_cache[uid] = (token, now)
+        if token:
+            _grid_token_cache[uid] = (token, now)
+        return token
+    return cached[0] if cached else None
+
+
+@app.get("/grid-sso")
+async def grid_sso(request: Request):
+    """Single sign-on for the embedded GRVTBot, scoped to the logged-in user. The
+    TradeOS login is the only login the user sees; returns THIS user's GRVT JWT
+    (cached 12h) for the iframe SPA. El password derivado nunca llega al browser."""
+    token = await _grid_token_for(request)
+    if token:
         return {"ok": True, "key": "grvt-grid-token", "token": token}
-    if cached:
-        return {"ok": True, "key": "grvt-grid-token", "token": cached[0], "cached": True}
-    return JSONResponse({"ok": False, "error": "grid_login_failed", "code": resp.status_code}, status_code=502)
+    return JSONResponse({"ok": False, "error": "grid_login_failed"}, status_code=502)
+
+
+# El proxy /grid inyecta este token en /grid/api/v2/* cuando el browser no manda
+# Authorization (arregla "No se pudieron cargar los bots"). Set aquí, tras definir la
+# función, para evitar el import circular con grvt_proxy.
+set_grid_token_provider(_grid_token_for)
 
 
 @app.get("/telegram")
@@ -2290,6 +2328,32 @@ PREPUMP_MIN_LIQUIDITY_USD = float(os.getenv("PUMP_PREPUMP_MIN_LIQUIDITY_USD", "4
 # separator on its own (DOGS 55 won, FTT 60 was a death-trap), so the liquidity floors
 # do the heavy lifting — this just stops "cualquier cosa" sub-50 from entering.
 PREPUMP_MIN_SCORE = float(os.getenv("PUMP_PREPUMP_MIN_SCORE", "50"))
+# REGIME GATE: abstención cuando el régimen de mercado es "unknown" (sin tendencia
+# clasificable). Medido: el bucket unknown rinde profit_factor 0.092 (38 trades, casi
+# todo pérdida = ~36% del drawdown total) y hoy entra igual porque el régimen "nunca
+# gatea". Bloquea SOLO trend=="unknown" (bull/bear/sideways pasan y se segmentan, no se
+# vetan). Cold-start ("" sin clasificar todavía) pasa para no ahogar el arranque. Tunable.
+PREPUMP_SKIP_UNKNOWN_REGIME = os.getenv("PUMP_SKIP_UNKNOWN_REGIME", "true").lower() == "true"
+# EDGESCORE GATE — el ranker de rentabilidad (Fase 2 EdgeScore). Entre los criminal-pumps
+# que pasaron TODAS las protecciones, opera solo los buckets con edge esperado real (MFE
+# esperado del bucket, de outcomes propios; ver LearningLab.edge_score). El patrón
+# criminal-pump sigue siendo el QUÉ; el EdgeScore decide el CUÁL. Cold-start (n <
+# EDGE_MIN_SAMPLES) NO gatea: deja operar pa acumular los datos que el EdgeScore necesita
+# (mejora con el tiempo — el motivo de elegir B). EDGE_MIN_SCORE = MFE % esperado mínimo.
+EDGE_GATE_ENABLED = os.getenv("PUMP_EDGE_GATE", "true").lower() == "true"
+# EDGE-WEIGHTED SIZING (gradual teeth): aplica el multiplicador de confianza (0.5–1.5×) al
+# tamaño REAL — antes se calculaba pero quedaba en "simulación" y NUNCA se aplicaba, así
+# que el bot apostaba IGUAL en bitget (gana, PF 2.05) que en binance (pierde, PF 0.29).
+# Con confidence_for exchange-aware el capital fluye al edge medido por venue×setup. Gradual
+# (no bloquea, escala) + auto-corrige (si un venue mejora, su tamaño vuelve a subir).
+EDGE_SIZING_ENABLED = os.getenv("PUMP_EDGE_SIZING", "true").lower() == "true"
+EDGE_MIN_SAMPLES = int(os.getenv("PUMP_EDGE_MIN_SAMPLES", "8"))
+# Umbral bajo a propósito: la medición reveló que el edge derivado de ALERTAS es débil en
+# TODO bucket (los que aplican a entradas reales, vol≥4×, dan MFE esperado ~0.4-1.0%). Un
+# umbral alto (3%) detendría el bot entero. 0.5 gatea solo lo muerto sin frenar la
+# operación; el EdgeScore-de-alertas afina con el tiempo. El gate FUERTE de rentabilidad
+# vendrá del edge por TRADES reales (expectancy por exchange: bitget gana, binance pierde).
+EDGE_MIN_SCORE = float(os.getenv("PUMP_EDGE_MIN_SCORE", "0.5"))
 # Precio MÁXIMO para la tesis criminal-pump (¢→$1→$2): el multi-x grande está en tokens
 # de precio bajo; uno ya caro tiene poco espacio. Enfoca el universo PRE-PUMP a precio
 # bajo. 0 = desactivado. Solo PRE-PUMP (gainers es momentum, price-agnostic). Tunable.
@@ -2540,6 +2604,16 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
     _onchain_ok = _heat >= FORENSIC_ONCHAIN_OVERRIDE_HEAT
     # PRECISION gate (pre-pump only) — the 3 levers combined to raise the 22% win-rate.
     if fsm_path:
+        # (a-1) REGIME GATE — "si no estoy 100% seguro, me abstengo". El régimen
+        # "unknown" (sin tendencia clasificable) midió profit_factor 0.092 = casi todo
+        # pérdida. Sin contexto de mercado el detector no tiene edge → no opera. Solo
+        # bloquea "unknown"; bull/bear/sideways pasan (se segmentan en analytics).
+        if PREPUMP_SKIP_UNKNOWN_REGIME:
+            _trend = (get_analytics().regime or "").split("/")[0]
+            if _trend == "unknown":
+                _record_learning(candidate.symbol, "skip_regime_unknown", "paper", candidate,
+                                 f"régimen sin clasificar ({get_analytics().regime or 'n/a'}) — sin contexto, abstención")
+                return False
         # (a0) SCORE FLOOR — rigidez: a sub-quality calificación never enters, even with
         # an on-chain lead. Cuts the measured junk (HYPER 36, ZKC 33) that bled the book.
         _pscore = int(getattr(candidate, "pump_score", 0) or 0)
@@ -2597,6 +2671,19 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
             _record_learning(candidate.symbol, "skip_lead_no_volume", "paper", candidate,
                              f"lead on-chain pero volumen muerto ({_entry_vol:.1f}x < {FSM_ONCHAIN_MIN_VOL_FLOOR:.1f}x)")
             return False
+        # (d) EDGESCORE GATE — entre los criminal-pumps ya protegidos, opera SOLO los
+        # buckets con edge esperado real (MFE esperado, de outcomes propios). Cold-start
+        # (n < EDGE_MIN_SAMPLES) NO gatea: deja operar pa acumular datos (mejora con el
+        # tiempo). Un bucket que históricamente NO se mueve → no entra (ataca el 4% de
+        # conversión: los duds dejan de drenar capital).
+        if EDGE_GATE_ENABLED:
+            _edge, _edge_n, _edge_dbg = _lab.edge_score(
+                cluster=candidate.cluster, vol_spike=(_entry_vol or 0))
+            if _edge_n >= EDGE_MIN_SAMPLES and _edge < EDGE_MIN_SCORE:
+                _record_learning(candidate.symbol, "skip_low_edge", "paper", candidate,
+                                 f"EdgeScore {_edge:.1f}% < {EDGE_MIN_SCORE:.1f}% esperado "
+                                 f"(bucket {_edge_dbg['bucket']}, n={_edge_n})")
+                return False
     # Differentiated learning (§4): a token already flagged dangerous (a prior scam/rug
     # tell) stays ACTIVELY avoided — redeemable only by strong on-chain buy pressure.
     if f"{candidate.exchange}:{candidate.symbol}" in _dangerous_signals and not _onchain_ok:
@@ -2683,14 +2770,38 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
         logger.info("forensic block %s: %s", candidate.symbol, reasons)
         return False
 
-    # Position size by FIXED RISK: risk a fixed % of balance per trade, sized so
-    # that hitting the dynamic stop loses exactly that. size = risk$ / (stop% ).
-    # Floor $10, never exceed balance. Falls back to auto_entry_usd if misconfigured.
+    # EDGE-WEIGHTED position size: FIXED RISK base (risk a % of balance, sized so the
+    # dynamic stop loses exactly that) SCALED by the setup×venue edge multiplier. The
+    # multiplier (0.5–1.5×) was computed before but left in "simulation" — now APPLIED, so
+    # capital flows to the measured edge (bitget up, binance/mexc down) instead of betting
+    # equal everywhere. confidence_for is exchange-aware. Floor $10, never exceed balance.
+    setup_type = setup_hint or ("accumulation" if fsm_path else ("velocity" if accel else "momentum"))
+    _eng = get_analytics()
+    confidence = _eng.confidence_for(setup_type, candidate.exchange)
+    size_mult = _eng.sizing_multiplier(confidence) if EDGE_SIZING_ENABLED else 1.0
     risk_pct = float(os.getenv("PUMP_RISK_PER_TRADE_PCT", "1.0"))
     stop_pct = float(os.getenv("PUMP_DYNAMIC_STOP_PCT", "5.0"))
     balance = bot.balance()
     size = (balance * risk_pct / 100) / (stop_pct / 100) if (stop_pct > 0 and balance > 0) else bot.auto_entry_usd
-    size = round(max(10.0, min(size, balance or bot.auto_entry_usd)), 2)
+    size = round(max(10.0, min(size * size_mult, balance or bot.auto_entry_usd)), 2)
+
+    # Circuit-breaker inputs (capital protection): activan los gates daily-loss +
+    # drawdown de risk.py que estaban en 0 = muertos. daily_loss = pérdida realizada
+    # HOY (USD+ si vas abajo); drawdown = % bajo el pico de equity. Auto-recuperan:
+    # daily resetea a medianoche UTC, drawdown al recobrar el pico.
+    _today = datetime.now(UTC).date()
+    _realized_today = 0.0
+    for _e in bot.pm.history:
+        try:
+            if datetime.fromisoformat(_e.at).date() == _today:
+                _realized_today += _e.pnl
+        except Exception:
+            continue
+    _daily_loss = round(max(0.0, -_realized_today), 2)
+    _eq_vals = [float(p.get("v") or 0) for p in bot.equity_history]
+    _cur_eq = bot.balance()
+    _peak_eq = max([*_eq_vals, _cur_eq]) if _eq_vals else _cur_eq
+    _dd_pct = round((_peak_eq - _cur_eq) / _peak_eq * 100.0, 2) if _peak_eq > 0 else 0.0
 
     sw.mark("validation")  # gates + ForensicFilter + risk sizing done
     result = await bot.engine.act(
@@ -2702,6 +2813,7 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
         # Iceberg: liquidez del libro como proxy de profundidad. Si el tamaño
         # supera el 2% → entrada partida en 3 para no mover el precio (microcaps).
         book_depth_usd=candidate.liquidity_usd,
+        daily_loss_usd=_daily_loss, current_drawdown_pct=_dd_pct,
     )
     sw.mark("order")  # order submission (paper fill) done
     # Entry latency: Detection (signal age) -> Validation (gates) -> Order submission.
@@ -2715,14 +2827,8 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
         "order_ms": sw.stages.get("order"),
         "total_ms": sw.total_ms(),
     })
-    # Analytics (Phase D): setup type + entry-time confidence + sizing SIMULATION.
-    # Confidence is derived from this setup's historical edge; the multiplier is
-    # computed and stored but NEVER applied to the live size (simulation mode).
-    setup_type = setup_hint or ("accumulation" if fsm_path else ("velocity" if accel else "momentum"))
-    _eng = get_analytics()
-    confidence = _eng.confidence_for(setup_type, candidate.exchange)
-    size_mult = _eng.sizing_multiplier(confidence)
-
+    # setup_type / confidence / size_mult computed above (now APPLIED to live size,
+    # edge-weighted by setup×venue). Recorded on the trade for the analytics ledger.
     opened_any = False
     book = _book
     # HONEST entry timing (mata la mentira del badge "PRE-PUMP"): lead = compró ANTES
@@ -2754,8 +2860,8 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
                 "entry_price": fill.fill_price,
                 "confidence_score": confidence, "risk_used": risk_pct,
                 "market_regime": _eng.regime, "entry_slippage_pct": entry_slip,
-                "sizing_mode": "simulation", "sizing_multiplier": size_mult,
-                "theoretical_size": round(size * size_mult, 2), "user_id": bot.uid,
+                "sizing_mode": "live" if EDGE_SIZING_ENABLED else "fixed", "sizing_multiplier": size_mult,
+                "theoretical_size": round(size, 2), "user_id": bot.uid,
             })
             await _persist_position(bot, opened)
             # Forensics (Fase 7/8): captura el contexto de ENTRADA del trade.
@@ -2955,7 +3061,14 @@ async def _perform_scan(min_pump_score: int = 1, full: bool = False) -> ScanResp
         logger.exception("velocity sync failed")
     # Mark equity per user (live total when that bot has keys, else paper).
     for bot in all_bots():
-        point = {"t": _last_scan_at.isoformat(), "v": bot.balance()}
+        v = bot.balance()
+        # Guard anti-glitch: bajo un stop de drawdown ~10% el equity no cae a la mitad
+        # entre escaneos. Un punto <=0 o <50% del último es un error de cálculo (lo que
+        # metía $100 sueltos al chart) → no se persiste. El lado alto (ganancias) libre.
+        _last = bot.equity_history[-1]["v"] if bot.equity_history else v
+        if v <= 0 or (_last > 0 and v < _last * 0.5):
+            continue
+        point = {"t": _last_scan_at.isoformat(), "v": v}
         bot.equity_history.append(point)
         del bot.equity_history[:-200]
         await store.insert_equity({**point, "user_id": bot.uid})
@@ -3055,6 +3168,34 @@ def _alert_age_ago(exchange: str, symbol: str) -> str | None:
     return _ago(datetime.fromtimestamp(max(epochs), tz=UTC))
 
 
+def _recent_fired_alerts(limit: int = 6) -> list[dict]:
+    """The alerts the bot ACTUALLY fired (same source that feeds Telegram), newest
+    first. Reads the alert-emission map `_signal_alert_at` instead of the transient
+    `waiting_confirmation` snapshot — the old source was almost always empty, so the
+    in-app 'Alertas' panel read 'Sin alertas todavía' while Telegram kept notifying.
+    Now the panel mirrors Telegram. Enriches with live market cluster/score."""
+    by_sym: dict[tuple[str, str], float] = {}
+    for k, ts in _signal_alert_at.items():
+        parts = k.split(":")
+        if len(parts) < 3:
+            continue
+        ex, sym = parts[1], parts[2]
+        cur = by_sym.get((ex, sym))
+        if cur is None or ts > cur:
+            by_sym[(ex, sym)] = ts
+    rows = sorted(by_sym.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+    out: list[dict] = []
+    for (ex, sym), ts in rows:
+        mk = _candidate_market.get(f"{ex.lower()}:{sym.upper()}")
+        out.append({
+            "symbol": sym,
+            "cluster": (mk["cluster"] if mk else None) or "n/a",
+            "score": (mk["score"] if mk else None) or 0,
+            "ago": _ago(datetime.fromtimestamp(ts, tz=UTC)),
+        })
+    return out
+
+
 def _req_bot(request: Request) -> UserBot:
     """The UserBot for the logged-in account (set by _auth_gate). Per-user P&L,
     balance and equity helpers live on the bot (see user_bot.py)."""
@@ -3133,15 +3274,7 @@ async def overview(request: Request) -> dict:
             for c in ranked[:12]
         ],
         "prepump": prepump,
-        "latest_alerts": [
-            {
-                "symbol": c.symbol,
-                "cluster": c.cluster,
-                "score": c.pump_score,
-                "ago": _alert_age_ago(c.exchange, c.symbol) or _ago(c.updated_at),
-            }
-            for c in alerts[:6]
-        ],
+        "latest_alerts": _recent_fired_alerts(6),
     }
 
 
@@ -3391,6 +3524,8 @@ async def entry_rejections() -> dict:
         "skip_lead_no_volume":    ("Volumen Muerto (Lead)",       "warn"),
         "skip_fsm_no_volume":     ("Sin Volumen Que Confirme",    "warn"),
         "skip_fsm_onchain_weak":  ("On-Chain Débil",              "muted"),
+        "skip_regime_unknown":    ("Régimen Sin Contexto",        "muted"),
+        "skip_low_edge":          ("Edge Esperado Bajo",          "muted"),
         "skip_parabolic":         ("Tope Parabólico Evitado",     "good"),
         "skip_exhausted":         ("Ya Corrido 24h",              "good"),
         "skip_no_breakout":       ("Sin Ruptura Alcista",         "info"),
@@ -3626,18 +3761,22 @@ async def update_settings(req: SettingsRequest, request: Request) -> dict:
         # Per-user concurrency cap (0 = sin límite). Session-level — resets to the
         # PUMP_MAX_OPEN_TRADES env default on restart.
         bot.guard.limits.max_open_trades = int(req.max_open_trades)
-    # --- Ajustes por motor (live; mutan el global del módulo + os.environ para que
-    # el optimizador 24h y un reinicio los respeten). Session-level salvo .env. ---
+    # --- Ajustes por motor (live; mutan el global del módulo + os.environ Y se
+    # PERSISTEN al store para que sobrevivan un reinicio — antes eran session-level
+    # y tu calibración se perdía en cada redeploy). ---
     if req.gainers_accel is not None:
         from . import velocity as _vel
-        _vel.ACCEL_FACTOR = float(req.gainers_accel)           # gainers: disparo en vivo
+        _vel.ACCEL_FACTOR = float(req.gainers_accel)           # acelerador ruptura FSM: en vivo
         os.environ["PUMP_VELOCITY_ACCEL_FACTOR"] = str(req.gainers_accel)
+        store.enqueue(lambda v=float(req.gainers_accel): store.set_state("velocity_accel_factor", str(v)))
     if req.pump_breakout_pct is not None:
         FSM_MIN_BREAKOUT_PCT = float(req.pump_breakout_pct)     # prepump: ruptura mín.
         os.environ["PUMP_FSM_MIN_BREAKOUT_PCT"] = str(req.pump_breakout_pct)
+        store.enqueue(lambda v=float(req.pump_breakout_pct): store.set_state("fsm_min_breakout_pct", str(v)))
     if req.pump_vol_spike is not None:
         FSM_MIN_ENTRY_VOL_SPIKE = float(req.pump_vol_spike)     # prepump: volumen mín.
         os.environ["PUMP_FSM_MIN_ENTRY_VOL_SPIKE"] = str(req.pump_vol_spike)
+        store.enqueue(lambda v=float(req.pump_vol_spike): store.set_state("fsm_min_entry_vol_spike", str(v)))
     return _settings_payload(bot, user.get("role", "operator"))
 
 
@@ -3707,6 +3846,32 @@ async def learning_snapshot() -> dict:
     """Feedback-loop analytics: did alerts fire before the pump, precision/recall,
     lead time, component contributions, and threshold proposals."""
     return _lab.snapshot()
+
+
+@app.get("/edge-score")
+async def edge_score_matrix() -> dict:
+    """EdgeScore por bucket (cluster × volumen): MFE esperado de cada bucket desde los
+    outcomes propios del bot. Es el ranker de rentabilidad que gatea la entrada — un
+    bucket con edge esperado < EDGE_MIN_SCORE no opera (cuando ya hay datos suficientes)."""
+    reps = {"<3x": 1.0, "3-6x": 4.0, ">=6x": 7.0}
+    matrix: dict[str, dict] = {}
+    for cl in ("classic", "long_pump", "accumulation"):
+        row = {}
+        for label, v in reps.items():
+            e, n, dbg = _lab.edge_score(cluster=cl, vol_spike=v)
+            row[label] = {"edge_pct": e, "n": n, "bucket": dbg["bucket"],
+                          "gates": (n >= EDGE_MIN_SAMPLES and e < EDGE_MIN_SCORE)}
+        matrix[cl] = row
+    return {"enabled": EDGE_GATE_ENABLED, "min_score": EDGE_MIN_SCORE,
+            "min_samples": EDGE_MIN_SAMPLES, "matrix": matrix}
+
+
+@app.get("/notifications")
+async def notifications_feed(since: int = 0) -> dict:
+    """Feed de notificaciones IN-APP (paridad con Telegram). El dashboard hace poll
+    con ?since=<último id visto> → trae solo las nuevas + el último id + total para
+    la campana. Misma fuente que Telegram (notify.push_feed), nunca divergen."""
+    return notify.feed_since(since)
 
 
 @app.get("/alerts/performance")

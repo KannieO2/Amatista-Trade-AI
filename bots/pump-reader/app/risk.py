@@ -15,12 +15,21 @@ import httpx
 
 RISK_ENGINE_URL = os.getenv("RISK_ENGINE_URL")  # e.g. http://risk-engine:8000
 
+# Circuit-breaker thresholds scale to the bot's CAPITAL (not flat $), so the
+# same % protection holds whatever the account size. Protege el compounding: una
+# mala racha no puede reventar la cuenta → sigues vivo para cazar los ganadores
+# (la rentabilidad de una estrategia baja-WR/cola-gorda vive de NO reventar).
+_CAPITAL = float(os.getenv("PUMP_PAPER_BALANCE", "1000"))
+_DAILY_LOSS_PCT = float(os.getenv("PUMP_MAX_DAILY_LOSS_PCT", "8"))    # halta entradas tras -8%/día
+_DRAWDOWN_PCT = float(os.getenv("PUMP_MAX_DRAWDOWN_PCT", "10"))       # halta a -10% del pico
+_POSITION_PCT = float(os.getenv("PUMP_MAX_POSITION_PCT", "25"))       # 1 trade ≤ 25% del capital
+
 
 @dataclass
 class RiskLimits:
-    max_daily_loss_usd: float = 250.0
-    max_drawdown_pct: float = 5.0
-    max_position_size_usd: float = 500.0
+    max_daily_loss_usd: float = round(_DAILY_LOSS_PCT / 100 * _CAPITAL, 2)
+    max_drawdown_pct: float = _DRAWDOWN_PCT
+    max_position_size_usd: float = round(_POSITION_PCT / 100 * _CAPITAL, 2)
     # Max simultaneous OPEN positions (predator strategy: concentrated, not
     # scattered). Counted from live open positions, not lifetime fills.
     max_open_trades: int = int(os.getenv("PUMP_MAX_OPEN_TRADES", "4"))

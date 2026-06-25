@@ -1,0 +1,49 @@
+{
+  "name": "@grvt-grid/bot",
+  "version": "0.1.0",
+  "description": "GRVT grid bot engine + REST + WebSocket server",
+  "license": "AGPL-3.0-or-later",
+  "private": true,
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/dashboard/server.ts",
+    "build": "tsc",
+    "start": "node dist/dashboard/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@metamask/eth-sig-util": "^8.2.0",
+    "@types/nodemailer": "^8.0.0",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.6.2",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.5.1",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^8.0.6",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0",
+    "sqlite3": "^6.0.1",
+    "undici": "^7.22.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^22.10.0",
+    "@types/sqlite3": "^3.1.11",
+    "@types/supertest": "^7.2.0",
+    "@types/ws": "^8.5.13",
+    "supertest": "^7.2.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

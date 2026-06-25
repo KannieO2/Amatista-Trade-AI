@@ -1,0 +1,63 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+.env.development
+*.log
+.DS_Store
+.vscode/
+.idea/
+coverage/
+.turbo/
+.next/
+.cache/
+# Bot runtime data. The patterns match at any depth so the multi-package
+# layout (packages/bot/data/grid_bot.db) is covered. The DB holds bcrypt
+# password hashes + AES-encrypted GRVT credentials of every user — must
+# never be committed even though the values are at-rest encrypted.
+data/*.db
+data/*.db-*
+**/data/*.db
+**/data/*.db-*
+**/data/*.db-wal
+**/data/*.db-shm
+**/data/grid_bot.*
+*.bak
+
+# Local-only memory + planning (never share)
+.claude/
+
+# Local-only temp deploy artifacts
+*.tar.gz
+.bot-*.sh
+.notifier-*.sh
+.dashboard-*.tar.gz
+.smtp-*.sh
+.smtp-key.tmp
+.fix-*.sh
+.dash-deploy.sh
+.caddy-*.sh
+.sol-*.sh
+.verify-*.sh
+.set-env-vars.sh
+
+# Local-only deploy artifacts — must never be committed
+.vps-pw
+.deploy-*.ps1
+.deploy-*.sh
+*.deploy-pw
+secrets/
+
+# TypeScript build artifacts that sometimes get pulled in alongside source
+**/src/**/*.js
+**/src/**/*.js.map
+**/src/**/*.d.ts
+**/src/**/*.d.ts.map
+**/tests/**/*.js
+**/tests/**/*.js.map
+**/tests/**/*.d.ts
+**/tests/**/*.d.ts.map
+**/*.tsbuildinfo

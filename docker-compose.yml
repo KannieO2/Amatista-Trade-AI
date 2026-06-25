@@ -25,6 +25,11 @@ services:
     environment:
       NODE_ENV: production
       DASHBOARD_PORT: "3848"
+      # Override the .env: el cifrado de creds GRVT necesita una ruta Linux. El .env
+      # local trae una ruta Windows (correcta para correr en local) que en el contenedor
+      # no existe → "Master key file not found". Aquí la fijamos al volumen persistido,
+      # y `environment:` gana sobre `env_file`, así un .env copiado de Windows nunca rompe.
+      MASTER_KEY_PATH: /app/data/master.key
     expose:
       - "3848"                          # interno a la red; no se publica al host
     volumes:

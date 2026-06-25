@@ -1,0 +1,43 @@
+[Unit]
+Description=GRVT Grid Notifier (Telegram)
+After=network-online.target grvt-grid-bot.service
+Wants=network-online.target
+# Soft dependency on the bot — if the bot is down we still want the notifier
+# alive so it can warn about restart loops via status transitions.
+
+[Service]
+Type=simple
+User=grvtbot
+Group=grvtbot
+WorkingDirectory=/opt/grvt-grid-notifier
+EnvironmentFile=/opt/grvt-grid-notifier/.env
+ExecStart=/usr/bin/node dist/index.js
+KillSignal=SIGTERM
+TimeoutStopSec=10
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/grvt-grid-notifier/notifier.log
+StandardError=append:/var/log/grvt-grid-notifier/error.log
+Environment=NODE_ENV=production
+
+# Persistent state directory for the cursor JSON.
+StateDirectory=grvt-grid-notifier
+StateDirectoryMode=0750
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/grvt-grid-notifier /var/log/grvt-grid-notifier
+ReadOnlyPaths=/opt/grvt-grid-bot/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+PrivateDevices=true
+
+[Install]
+WantedBy=multi-user.target

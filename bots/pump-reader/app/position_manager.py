@@ -89,6 +89,14 @@ def _prepump_max_hold_min() -> float:
     return float(os.getenv("PUMP_PREPUMP_MAX_HOLD_MINUTES", "1440"))  # 24h backstop (covers 21h lead)
 
 
+def _prepump_faded_cut_min() -> float:
+    """Responsive volume-collapse cut (user: 'si baja el volumen de compra, salir').
+    A flat accumulation whose 1m volume has STAYED faded (< VOLUME_ALIVE_FRAC of peak)
+    this many minutes is cut NOW instead of waiting the 6h flat timeout — the fuel for
+    the ignition is gone. 0 disables (fall back to the old 6h gate)."""
+    return float(os.getenv("PUMP_PREPUMP_FADED_CUT_MINUTES", "45"))
+
+
 def exit_profile(cluster: str, book: str = "prepump") -> dict:
     """Per-trade exit params. Reads env in real time (so the 24h auto-optimizer can
     retune by mutating os.environ without a restart), then applies the cluster
@@ -113,11 +121,13 @@ def exit_profile(cluster: str, book: str = "prepump") -> dict:
     if book == "prepump":
         base["timeout_min"] = _prepump_timeout_min()
         base["max_hold_min"] = _prepump_max_hold_min()
-        # Hard-stop override for the accumulation thesis: a pre-pump hold tolerates a
-        # deeper dip than a momentum trade (the move can shake out before it runs).
-        # Default 0 = keep the cluster-tuned hard stop (NO behaviour change); set a
-        # wider % to let prepump ride dips, or a tighter one to protect harder.
-        hs = float(os.getenv("PUMP_PREPUMP_HARD_STOP_PCT", "0"))
+        # Hard-stop for the accumulation book. RR fix (medido): con WR 28.6% y hard-stop
+        # 8% las perdedoras corrían al -8% completo (avg_loss 3.69 ≈ avg_win 3.96 → RR
+        # 1.07, expectancy negativa). La tesis "tolera dip profundo" NO pagaba: los dips
+        # se volvían stop completo, no recuperación. Tightened a 5% (1.7× la banda lateral
+        # ±3% → deja margen al shakeout normal pero corta el desastre). Esto baja avg_loss
+        # ~37% sin tocar las ganadoras. Tunable (0 = volver al hard-stop por-cluster).
+        hs = float(os.getenv("PUMP_PREPUMP_HARD_STOP_PCT", "5"))
         if hs > 0:
             base["hard_stop_pct"] = hs
     return base
@@ -149,6 +159,7 @@ class ManagedPosition:
     peak_volume: float = 0.0      # max 1m volume seen during the trade (fuel gauge)
     last_volume: float = 0.0      # latest 1m volume (vs peak → alive / faded)
     stale_since: datetime | None = None  # first tick with no valid price (ghost reaper)
+    vol_fade_since: datetime | None = None  # first tick where 1m buy volume fell below alive-frac (responsive vol-collapse cut)
     # --- telemetry only (never affect exit decisions) ---
     signal_at: datetime | None = None   # when the signal that triggered entry fired
     be_at: datetime | None = None       # when break-even armed
@@ -260,6 +271,22 @@ class PositionManager:
         if pos.dynamic_stop > 0 and price <= pos.dynamic_stop:
             events.append(self._sell(pos, price, 1.0, "trailing"))
             return events
+        # Responsive VOLUME-COLLAPSE cut (prepump) — user: "analizar si baja el volumen
+        # de compra para salir". The fuel gauge: track how long the 1m volume has STAYED
+        # faded (< VOLUME_ALIVE_FRAC of the peak). On a FLAT trade (|gain| <= band; a
+        # moving one is owned by TP/trail/stop) that's been faded for FADED_CUT_MINUTES,
+        # the accumulation isn't igniting → free the capital NOW (not at the 6h timeout).
+        # vol_fade_since resets the instant volume revives, so a brief dip never cuts.
+        _fcm = _prepump_faded_cut_min()
+        if (pos.book == "prepump" and _fcm > 0 and pos.peak_volume > 0
+                and pos.last_volume > 0 and abs(gain) <= TIMEOUT_BAND_PCT):
+            if pos.last_volume < VOLUME_ALIVE_FRAC * pos.peak_volume:
+                pos.vol_fade_since = pos.vol_fade_since or now
+                if (now - pos.vol_fade_since).total_seconds() / 60 >= _fcm:
+                    events.append(self._sell(pos, price, 1.0, "vol_fade"))
+                    return events
+            else:
+                pos.vol_fade_since = None  # volume revived → reset the fade clock
         # Fast dead-trade cut — GAINERS ONLY. For a momentum entry, flat-after-entry
         # = the move we chased is dead, cut cheap NOW (attacks the #1 measured bleed:
         # slow flat timeouts at -1.25%). For PREPUMP this is WRONG: an accumulation
