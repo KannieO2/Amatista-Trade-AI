@@ -417,7 +417,11 @@ DASHBOARD_HTML = r"""<!doctype html>
   .app.grid-mode #tb-pump-only{display:none}
   /* grid mode = full-bleed iframe, no chrome, fills under the top bar */
   #view-grvt{padding:0;gap:0;flex:1;min-height:0}
-  #grvt-frame{width:100%;flex:1;min-height:0;border:0;display:block;background:#0b0e14}
+  #grvt-frame{width:100%;flex:1;min-height:0;border:0;display:block;background:var(--bg);animation:none}
+  /* transición pump↔grid SIN salto: el iframe queda caliente (no recarga) + crossfade
+     limpio (opacidad, no el slide riseIn que mueve todo el iframe) + el fondo = var(--bg)
+     idéntico al pump → no hay flash. Switch de vuelta a pump usa el riseIn de .view. */
+  @keyframes gridFade{from{opacity:0}to{opacity:1}}
   /* Parity con pump: el sidebar lo aporta el iframe del grid (212px). El topbar
      (toggle Pump/Grid + acciones) FLOTA solo sobre el área de contenido (left:212px)
      en vez de empujar el iframe hacia abajo → el logo Amatista del grid queda
@@ -425,7 +429,8 @@ DASHBOARD_HTML = r"""<!doctype html>
      contenido del grid se empuja vía CSS inyectado (#main-content padding-top). */
   .app.grid-mode .main{position:relative}
   .app.grid-mode .topbar{position:absolute;top:0;left:212px;right:0;z-index:30}
-  .app.grid-mode #view-grvt{position:absolute;inset:0;z-index:10;display:flex;flex-direction:column}
+  .app.grid-mode #view-grvt{position:absolute;inset:0;z-index:10;display:flex;flex-direction:column;animation:gridFade .3s cubic-bezier(.16,1,.3,1) both}
+  .app.grid-mode .topbar{transition:left .3s cubic-bezier(.16,1,.3,1)}
 </style>
 </head>
 <body>

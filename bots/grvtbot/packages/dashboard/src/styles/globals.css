@@ -246,3 +246,104 @@ button:active,
 [role='button']:active {
   transform: translateY(0.5px);
 }
+
+/* ── Pump parity: iluminación liquid-glass (igual que el dashboard pump) ──
+ * El pump ilumina .panel/.card; el grid usa utilidades Tailwind, así que
+ * targeteamos el combo de clases de los contenedores-tarjeta (Card primitive
+ * = bg-elevated + rounded-lg; paneles surface). El bg del grid era SÓLIDO →
+ * backdrop-filter era no-op. Lo hacemos translúcido (gradiente) + sombras en
+ * capas (inset highlight + drop tintada) + sheen del borde superior + hover
+ * morado Amatista. Solo background/box-shadow/filter/transform → 60fps, no
+ * toca layout. Respeta prefers-reduced-motion (arriba). */
+.bg-bg-elevated.rounded-lg,
+.bg-bg-elevated.rounded-xl,
+.bg-bg-surface.rounded-lg,
+.bg-bg-surface.rounded-xl,
+.bg-bg-surface.rounded-2xl {
+  position: relative;
+  background: linear-gradient(180deg, rgba(32, 42, 60, 0.6), rgba(13, 18, 28, 0.52));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 22px 54px -30px rgba(0, 0, 0, 0.85),
+    0 0 0 1px rgba(255, 255, 255, 0.015);
+  backdrop-filter: blur(22px) saturate(160%);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  transition:
+    transform 0.26s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.26s ease,
+    border-color 0.26s ease;
+}
+
+/* Hover glow morado (igual que .panel:hover del pump) */
+.bg-bg-elevated.rounded-lg:hover,
+.bg-bg-surface.rounded-lg:hover,
+.bg-bg-surface.rounded-xl:hover,
+.bg-bg-surface.rounded-2xl:hover {
+  transform: translateY(-3px);
+  border-color: rgba(160, 92, 242, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 32px 64px -28px rgba(0, 0, 0, 0.92),
+    0 0 36px -10px rgba(160, 92, 242, 0.22);
+}
+
+/* Sheen del borde superior (igual que .panel::after del pump) */
+.bg-bg-elevated.rounded-lg::after,
+.bg-bg-surface.rounded-lg::after,
+.bg-bg-surface.rounded-xl::after,
+.bg-bg-surface.rounded-2xl::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 14px;
+  right: 14px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+  pointer-events: none;
+}
+
+/* Light theme: glow más sutil, sin blur (bg near-white), sheen apagado */
+html[data-theme='light'] .bg-bg-elevated.rounded-lg,
+html[data-theme='light'] .bg-bg-elevated.rounded-xl,
+html[data-theme='light'] .bg-bg-surface.rounded-lg,
+html[data-theme='light'] .bg-bg-surface.rounded-xl,
+html[data-theme='light'] .bg-bg-surface.rounded-2xl {
+  background: var(--color-bg-elevated);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    0 18px 40px -28px rgba(15, 22, 34, 0.25);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+html[data-theme='light'] .bg-bg-elevated.rounded-lg::after,
+html[data-theme='light'] .bg-bg-surface.rounded-lg::after,
+html[data-theme='light'] .bg-bg-surface.rounded-xl::after,
+html[data-theme='light'] .bg-bg-surface.rounded-2xl::after {
+  display: none;
+}
+
+/* ── Pump parity: fondo ambient-glow (idéntico al body del pump) ──
+ * El shell del grid (app-shell.tsx) pinta `bg-bg-base` opaco encima del body →
+ * tapaba el fondo. Sin el glow, las tarjetas translúcidas revelaban negro plano
+ * y se veían "más iluminadas" que el pump. Clonamos las 5 capas de radial-gradient
+ * del pump (morado/azul/verde/lila) en el shell para que el glass revele el MISMO
+ * ambiente → paridad total de fondos + iluminación. `fixed` = glow estable al
+ * scroll (como el body del pump). Selector .min-h-dvh.bg-bg-base (2 clases) gana
+ * specificity a la utilidad .bg-bg-base; cubre shell + pantallas de auth. */
+.min-h-dvh.bg-bg-base {
+  background:
+    radial-gradient(1050px 560px at 8% -10%, rgba(160, 92, 242, 0.2), transparent 56%),
+    radial-gradient(950px 640px at 104% -6%, rgba(61, 123, 255, 0.17), transparent 54%),
+    radial-gradient(820px 760px at 88% 112%, rgba(47, 208, 138, 0.13), transparent 58%),
+    radial-gradient(700px 700px at 50% 50%, rgba(139, 134, 242, 0.07), transparent 70%),
+    var(--color-bg-base);
+  background-attachment: fixed;
+}
+html[data-theme='light'] .min-h-dvh.bg-bg-base {
+  background:
+    radial-gradient(1000px 540px at 10% -8%, rgba(160, 92, 242, 0.08), transparent 58%),
+    radial-gradient(900px 620px at 102% -4%, rgba(61, 123, 255, 0.07), transparent 55%),
+    radial-gradient(700px 700px at 85% 110%, rgba(139, 134, 242, 0.06), transparent 60%),
+    var(--color-bg-base);
+  background-attachment: fixed;
+}

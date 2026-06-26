@@ -216,7 +216,23 @@ _ENTRY_ACTIONS = ("auto_entry", "execute", "onchain_lead_entry")
 # Dangerous tokens stay avoided across restarts (a rug that briefly thickens its
 # book to bait entries is still a rug). Persisted in bot_state (SQLite, REST-safe),
 # but redeemable by strong on-chain buy pressure — same override as forensic.
-_dangerous_signals: set[str] = set()
+_dangerous_signals: dict[str, float] = {}   # "exch:sym" -> epoch flagged (con TTL)
+# TTL del flag peligroso. Un libro thin+concentrado (MANIPULATION_SUSPECT) es NORMAL y
+# TRANSITORIO en los microcaps que la tesis CAZA → el flag permanente vetaba pa siempre justo
+# el tipo de moneda que debe operar. Con TTL: un rug persistente se re-marca cada scan (sigue
+# vetado y refresca el reloj); uno transitorio CADUCA y re-entra al embudo. 0 = permanente.
+DANGEROUS_TTL_HOURS = float(os.getenv("PUMP_DANGEROUS_TTL_HOURS", "12"))
+
+
+def _is_dangerous(key: str) -> bool:
+    """True si el flag sigue VIGENTE (dentro del TTL). Caduca + limpia los viejos al leer."""
+    ts = _dangerous_signals.get(key)
+    if ts is None:
+        return False
+    if DANGEROUS_TTL_HOURS > 0 and (datetime.now(UTC).timestamp() - ts) > DANGEROUS_TTL_HOURS * 3600:
+        _dangerous_signals.pop(key, None)
+        return False
+    return True
 
 
 def _learning_bucket(action: str, detail: str) -> str:
@@ -230,12 +246,12 @@ def _learning_bucket(action: str, detail: str) -> str:
 
 def _mark_dangerous(exchange: str, symbol: str) -> None:
     key = f"{exchange}:{symbol}"
-    if key in _dangerous_signals:
-        return
-    _dangerous_signals.add(key)
+    _dangerous_signals[key] = datetime.now(UTC).timestamp()   # marca/refresca el TTL
     if store.enabled():
         import json as _json
-        payload = _json.dumps(sorted(_dangerous_signals)[-500:])
+        # persiste los 500 más recientes (el TTL ya auto-poda; esto acota el payload)
+        items = sorted(_dangerous_signals.items(), key=lambda x: -x[1])[:500]
+        payload = _json.dumps(dict(items))
         try:
             asyncio.create_task(store.set_state("dangerous_signals", payload))
         except RuntimeError:
@@ -248,8 +264,14 @@ async def _load_dangerous_signals() -> None:
         return
     import json as _json
     try:
-        for k in _json.loads(raw):
-            _dangerous_signals.add(str(k))
+        data = _json.loads(raw)
+        now = datetime.now(UTC).timestamp()
+        if isinstance(data, dict):          # formato nuevo {key: ts}
+            for k, ts in data.items():
+                _dangerous_signals[str(k)] = float(ts)
+        else:                               # formato viejo [key,...] sin ts → arranca el TTL ahora
+            for k in data:
+                _dangerous_signals[str(k)] = now
     except Exception:
         logger.exception("load dangerous_signals failed")
 
@@ -331,6 +353,13 @@ ENTRY_MIN_CONFIDENCE = float(os.getenv("PUMP_ENTRY_MIN_CONFIDENCE", "50"))
 #       tokens like SLX have no/weak DEX presence — that's normal, not a red flag).
 # (FSM score thresholds = the 3rd lever, raised in .env: PUMP_FSM_ACC_MIN/PERS_MIN.)
 FSM_MIN_BREAKOUT_PCT = float(os.getenv("PUMP_FSM_MIN_BREAKOUT_PCT", "1.5"))
+# IGNICIÓN LIGERA (pre-pump). El flat PURO resuelve 50/50: el forense de 30 trades midió
+# que el 84% de las entradas fueron DIRECTO ABAJO (mfe~0, nunca verde), mientras las
+# ganadoras YA estaban ligadas arriba +2.6 a +7.9%. El lab confirma 1/104 hit en flat puro.
+# Exigir el PRIMER lean alcista (no la ruptura completa = tarde) filtra los que rompen abajo
+# sin llegar tarde — las ganadoras corrieron 2.6%+, +0.6% deja runway. Sigue siendo ANTES del
+# grueso del pump. 0 = volver a flat puro. onchain_lead lo waivea. Tunable.
+FSM_IGNITION_MIN_PCT = float(os.getenv("PUMP_FSM_IGNITION_MIN_PCT", "0.6"))
 FSM_REQUIRE_ONCHAIN_WHEN_AVAIL = os.getenv("PUMP_FSM_REQUIRE_ONCHAIN", "true").lower() == "true"
 FSM_ONCHAIN_MIN_HEAT = int(os.getenv("PUMP_FSM_ONCHAIN_MIN_HEAT", "55"))
 # 21h-TIMING fix (data-driven). Forensics on 212 real trades: pre_pump_accumulation
@@ -1456,7 +1485,11 @@ async def _onchain_loop() -> None:
 
 
 COINBASE_POLL_SECONDS = int(os.getenv("PUMP_COINBASE_POLL_SECONDS", "120"))
-COINBASE_LISTING_ENTER = os.getenv("PUMP_COINBASE_LISTING_ENTER", "false").lower() == "true"
+# ON por defecto: el listing de Coinbase es un catalizador PÚBLICO y líder (no
+# adivinanza de order-book) — el edge real para cruzar el techo. skip_gates saltea
+# solo los gates de SEÑAL; la protección de capital (kill-switch + daily-loss +
+# drawdown + max-open) SÍ se respeta. Override con PUMP_COINBASE_LISTING_ENTER=false.
+COINBASE_LISTING_ENTER = os.getenv("PUMP_COINBASE_LISTING_ENTER", "true").lower() == "true"
 
 
 async def _handle_coinbase_listing(ev: dict) -> None:
@@ -2637,6 +2670,16 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
         _record_learning(candidate.symbol, "skip_parabolic", "paper", candidate,
                          f"+{runup:.0f}% en velas recientes (tope, no acumulación)")
         return False
+    # IGNICIÓN LIGERA (pre-pump): el flat PURO resuelve 50/50 → 84% de entradas iban directo
+    # abajo (forense). Exige el PRIMER lean alcista para entrar sólo cuando la acumulación
+    # EMPIEZA a resolver arriba (no la ruptura completa = tarde; sigue siendo antes del grueso).
+    # onchain_lead lo waivea (la compra on-chain ES la señal, días antes del mover en el venue).
+    if fsm_path and not skip_gates and not onchain_lead and FSM_IGNITION_MIN_PCT > 0:
+        if runup < FSM_IGNITION_MIN_PCT:
+            _record_learning(candidate.symbol, "skip_no_ignition", "paper", candidate,
+                             f"plano sin lean alcista (+{runup:.1f}% < +{FSM_IGNITION_MIN_PCT:.1f}%) — "
+                             f"resuelve 50/50, espera el primer tick arriba")
+            return False
     if not fsm_path and not skip_gates:
         # (b) anti-FLAT: require a CONFIRMED up-break so the momentum path doesn't buy
         # a flat base that breaks 50/50 (the MFE=+0.0% churn). Entry only in the band
@@ -2756,7 +2799,7 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
                 return False
     # Differentiated learning (§4): a token already flagged dangerous (a prior scam/rug
     # tell) stays ACTIVELY avoided — redeemable only by strong on-chain buy pressure.
-    if f"{candidate.exchange}:{candidate.symbol}" in _dangerous_signals and not _onchain_ok:
+    if _is_dangerous(f"{candidate.exchange}:{candidate.symbol}") and not _onchain_ok:
         _record_learning(candidate.symbol, "skip_dangerous", "paper", candidate,
                          "patrón peligroso previo (Dangerous_Signals) sin confirmación on-chain")
         return False
@@ -3659,7 +3702,7 @@ async def learning_buckets() -> dict:
                            "action": r.action, "detail": r.detail})
     return {
         "counts": {k: len(v) for k, v in buckets.items()},
-        "dangerous_active": sorted(_dangerous_signals),
+        "dangerous_active": sorted(k for k in list(_dangerous_signals) if _is_dangerous(k)),
         "successful": buckets["successful"][-20:][::-1],
         "dangerous": buckets["dangerous"][-20:][::-1],
         "failed": buckets["failed"][-20:][::-1],
