@@ -418,6 +418,14 @@ DASHBOARD_HTML = r"""<!doctype html>
   /* grid mode = full-bleed iframe, no chrome, fills under the top bar */
   #view-grvt{padding:0;gap:0;flex:1;min-height:0}
   #grvt-frame{width:100%;flex:1;min-height:0;border:0;display:block;background:#0b0e14}
+  /* Parity con pump: el sidebar lo aporta el iframe del grid (212px). El topbar
+     (toggle Pump/Grid + acciones) FLOTA solo sobre el área de contenido (left:212px)
+     en vez de empujar el iframe hacia abajo → el logo Amatista del grid queda
+     arriba-izquierda y el toggle arriba-derecha, igual que en Pump Reader. El
+     contenido del grid se empuja vía CSS inyectado (#main-content padding-top). */
+  .app.grid-mode .main{position:relative}
+  .app.grid-mode .topbar{position:absolute;top:0;left:212px;right:0;z-index:30}
+  .app.grid-mode #view-grvt{position:absolute;inset:0;z-index:10;display:flex;flex-direction:column}
 </style>
 </head>
 <body>
@@ -1628,7 +1636,11 @@ async function loadSettings(){
   $("set-count").textContent=s.candidate_count;
   $("set-pos").textContent=s.open_positions;
   $("set-last").textContent=s.last_scan_at?new Date(s.last_scan_at).toLocaleTimeString():"—";
-  $("set-kill").innerHTML=s.kill_switch_active?'<span style="color:var(--red)">ACTIVE</span>':'<span style="color:var(--green)">off</span>';
+  if(s.kill_switch_active){
+    const r=s.kill_switch_reason||"manual", auto=r.startsWith("auto:");
+    const col=auto?"#e8a44a":"var(--red)", why=auto?r.replace(/^auto:\s*/,""):"manual";
+    $("set-kill").innerHTML=`<span style="color:${col}">ACTIVE</span> <span class="mono" style="color:var(--muted);font-size:11px">· ${why}</span>`;
+  } else { $("set-kill").innerHTML='<span style="color:var(--green)">off</span>'; }
   $("set-alloc-total").textContent=money(a.bot_total_usdt);
   $("set-alloc-split").textContent=Object.entries(a.splits).map(([k,v])=>`${k} ${v}%`).join(" · ");
   $("set-persist").innerHTML = s.persistence==="supabase"

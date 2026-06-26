@@ -26,6 +26,9 @@ bots/pump-reader/data/
 # generated knowledge graph (graphify)
 graphify-out/
 
+# análisis Montecarlo: artefactos generados (charts/json/log regenerables)
+analysis/out/
+
 # local Claude config
 .claude/
 

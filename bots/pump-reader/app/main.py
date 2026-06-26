@@ -248,22 +248,20 @@ async def _load_dangerous_signals() -> None:
 # threshold so the exit engine has something to manage. Never auto-enters live.
 AUTO_ENTRY = os.getenv("PUMP_AUTO_ENTRY", "true").lower() == "true"
 AUTO_ENTRY_USD = float(os.getenv("PUMP_AUTO_ENTRY_USD", "100"))
-# Entry authority. The pump must be caught BEFORE it runs, so by default ONLY the
-# pre-pump FSM (accumulation/persistence/rug over a window) may auto-enter. The
-# momentum scan-path (pump_score>=threshold = already up) and the velocity-accel
-# path (a move already underway) are LATE BY CONSTRUCTION. Their auto-entry is OFF
-# by default — they still scan, alert and feed the recorder/FSM, they just don't
-# buy the breakout. Flip these on only to deliberately allow late momentum chasing.
-MOMENTUM_AUTOENTRY = os.getenv("PUMP_MOMENTUM_AUTOENTRY", "false").lower() == "true"
-VELOCITY_AUTOENTRY = os.getenv("PUMP_VELOCITY_AUTOENTRY", "false").lower() == "true"
-# --- GAINERS (momentum) — its OWN config namespace, fully separate from the prepump
-# bot so tuning one never touches the other (user: "que nada se mezcle"). Gainers
-# RIDE a move already underway, so their rules invert the prepump bot's: they buy
-# liquid/running tokens near the high, with their own slot budget and exit profile.
-# Gainers actually TRADE the anticipatory "coil" trigger (predicted pre-breakout) —
-# that's the EARLY entry the user wants, aligned with the detect-before thesis. Raw
-# "momentum" triggers (move already underway = LATE) stay off (VELOCITY_AUTOENTRY).
-GAINERS_COIL_AUTOENTRY = os.getenv("PUMP_GAINERS_COIL_AUTOENTRY", "true").lower() == "true"
+# Entry authority — CRIMINAL-PUMP ONLY (directiva del usuario: "no momentum, centra el
+# bot en los criminal pump"). El pump se caza ANTES de correr → la ÚNICA vía de auto-
+# entrada es el FSM pre-pump (acumulación/persistencia/rug sobre una ventana) + su
+# acelerador de ruptura (velocity_ruptura, también FSM-confirmado). El chase de momentum/
+# velocity/gainers (un movimiento YA en curso = TARDE por construcción, grade F medido)
+# queda ELIMINADO: pineado en False, NO env-flippable, para que el bot NUNCA compre un
+# breakout perseguido. El scanner sigue manteniendo el radar de candidatos y alimentando
+# el FSM; las alertas + entradas salen EXCLUSIVAMENTE del FSM de acumulación.
+MOMENTUM_AUTOENTRY = False   # ELIMINADO (criminal-pump only) — antes PUMP_MOMENTUM_AUTOENTRY
+VELOCITY_AUTOENTRY = False   # ELIMINADO (criminal-pump only) — antes PUMP_VELOCITY_AUTOENTRY
+# --- GAINERS — ENTRADA ELIMINADA (criminal-pump only). Se conservan SOLO las constantes
+# de tamaño/forensic abajo por si el radar/explore las referencia, pero NINGÚN gainer
+# auto-entra. El "coil" anticipatorio que valía ya vive dentro del FSM de acumulación.
+GAINERS_COIL_AUTOENTRY = False   # ELIMINADO (criminal-pump only) — antes PUMP_GAINERS_COIL_AUTOENTRY
 GAINERS_MAX_OPEN = int(os.getenv("PUMP_GAINERS_MAX_OPEN", "3"))           # own concurrency budget
 GAINERS_MIN_LIQUIDITY_USD = float(os.getenv("PUMP_GAINERS_MIN_LIQUIDITY_USD", "80000"))  # own forensic floor
 GAINERS_MAX_CHASE_PCT = float(os.getenv("PUMP_GAINERS_MAX_CHASE_PCT", "40"))  # own anti-top (24h ceiling)
@@ -335,6 +333,13 @@ FSM_ONCHAIN_MIN_HEAT = int(os.getenv("PUMP_FSM_ONCHAIN_MIN_HEAT", "55"))
 # (minutes OR hours later), capturing the lead instead of guessing the bottom.
 FSM_REQUIRE_VOLUME = os.getenv("PUMP_FSM_REQUIRE_VOLUME", "true").lower() == "true"
 FSM_MIN_ENTRY_VOL_SPIKE = float(os.getenv("PUMP_FSM_MIN_ENTRY_VOL_SPIKE", "4"))
+# ENTRAR ANTES (tesis criminal-pump). El FSM confirmado (acc/pers/rug sobre ventana, con el
+# accumulation_score exigiendo vol↑ con precio PLANO) ES la entrada — se compra DURANTE la
+# acumulación. Los gates de breakout (flat/volumen/on-chain) se ELIMINARON: el log real probó
+# que rechazaban el 98% de la tesis (1030/1054 — 657 skip_fsm_flat + 257 on-chain), esperando
+# un breakout que llega tarde o nunca. Queda SOLO un piso anti-libro-muerto. On-chain = bono
+# de sizing; el anti-rug (dump en curso) + forensic + score/price floor siguen protegiendo.
+FSM_CONFIRM_MIN_VOL = float(os.getenv("PUMP_FSM_CONFIRM_MIN_VOL", "1.3"))  # piso anti-libro-muerto
 # Piso de volumen MÍNIMO incluso en el path on-chain LEAD (que normalmente waivea el
 # gate de 4x). Un lead con libro MUERTO (NIL @1.9x, FTT @0.9x = perdedores con hard_stop)
 # no debe entrar solo por heat. El ganador LAYER tuvo 2.1x → el piso 2.0x los separa.
@@ -2642,28 +2647,14 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
         # YA movido era un doble-gate que bloqueó 110 entradas (el #1 rechazo "Plano,
         # Sin Ruptura"). Si el volumen YA confirma el arranque, el precio-plano NO debe
         # doble-bloquear — el 4x ES la ruptura, el precio la sigue.
+        # ENTRAR ANTES: el FSM confirmó la acumulación → ESA es la entrada. Sin gates de
+        # breakout (eran la sobre-ingeniería que rechazaba el 98% de la tesis). Solo se veta
+        # libro MUERTO (sin volumen vivo Y plano = ni acumulación es).
         _vol_now = accel if accel is not None else candidate.volume_spike
-        _vol_confirms = _vol_now is not None and _vol_now >= FSM_MIN_ENTRY_VOL_SPIKE
-        if not onchain_lead and not _vol_confirms and runup < FSM_MIN_BREAKOUT_PCT:
-            _record_learning(candidate.symbol, "skip_fsm_flat", "paper", candidate,
-                             f"plano (+{runup:.1f}% < {FSM_MIN_BREAKOUT_PCT:.1f}%) y sin volumen ({(_vol_now or 0):.1f}x < {FSM_MIN_ENTRY_VOL_SPIKE:.1f}x)")
-            return False
-        # (b) On-chain VETO — only when the token actually HAS DEX coverage. No
-        # coverage (CEX-only USDT token) → pass; the CEX order book stays the signal.
-        _hinfo = _onchain_heat.get(f"{candidate.exchange}:{candidate.symbol}")
-        _has_dex = bool(_hinfo and _hinfo.get("dex") is not None)
-        if FSM_REQUIRE_ONCHAIN_WHEN_AVAIL and _has_dex and _heat < FSM_ONCHAIN_MIN_HEAT:
-            _record_learning(candidate.symbol, "skip_fsm_onchain_weak", "paper", candidate,
-                             f"on-chain disponible pero sin presión compradora (heat {_heat} < {FSM_ONCHAIN_MIN_HEAT})")
-            return False
-        # (c) VOLUME CONFIRMATION — the 21h-timing fix. Don't buy the flat pre-pump
-        # base (9% win); wait until real volume confirms the move STARTED (the only
-        # profitable bucket: >6x). Re-flagged each scan, so it fires when the move
-        # actually arrives (the ~21h lead) instead of bleeding out on the clock first.
-        _entry_vol = accel if accel is not None else candidate.volume_spike
-        if not onchain_lead and FSM_REQUIRE_VOLUME and (_entry_vol is None or _entry_vol < FSM_MIN_ENTRY_VOL_SPIKE):
-            _record_learning(candidate.symbol, "skip_fsm_no_volume", "paper", candidate,
-                             f"acumulación sin volumen confirmando el arranque ({(_entry_vol or 0):.1f}x < {FSM_MIN_ENTRY_VOL_SPIKE:.1f}x)")
+        _entry_vol = _vol_now
+        if not onchain_lead and (_vol_now or 0) < FSM_CONFIRM_MIN_VOL and runup < FSM_MIN_BREAKOUT_PCT:
+            _record_learning(candidate.symbol, "skip_dead_book", "paper", candidate,
+                             f"libro muerto (vol {(_vol_now or 0):.1f}x < {FSM_CONFIRM_MIN_VOL:.1f}x y plano +{runup:.1f}%)")
             return False
         # Incluso un LEAD on-chain exige volumen MÍNIMO: un libro muerto (NIL @1.9x perdió,
         # FTT @0.9x perdió) no entra solo por heat. LAYER (ganador) tuvo 2.1x → el piso separa.
@@ -2986,18 +2977,10 @@ async def _perform_scan(min_pump_score: int = 1, full: bool = False) -> ScanResp
         _candidate_market[f"{candidate.exchange.lower()}:{candidate.symbol.upper()}"] = {
             "score": candidate.pump_score, "cluster": candidate.cluster,
             "delta_24h": candidate.price_change_pct_24h, "spark": candidate.spark}
-        if candidate.status == CandidateStatus.waiting_confirmation:
-            # NO se alerta aquí. La ÚNICA alerta de cara al usuario sale de la FSM
-            # (_emit_signal_alert) cuando confirma acumulación sostenida — evita el
-            # humo del pump_score de scan (momentum → tokens que marcan +0%). El scan
-            # solo mantiene _candidates (radar interno) y, si está explícitamente
-            # activado, el camino momentum legacy (off por defecto).
-            if current_mode() == ExecMode.paper and MOMENTUM_AUTOENTRY:
-                # LATE path (off by default): only runs if momentum chasing is
-                # explicitly re-enabled. The pre-pump FSM is the default authority.
-                for bot in all_bots():
-                    if bot.auto_entry and not bot.pm.has(candidate.exchange, candidate.symbol):
-                        await _auto_enter(bot, candidate)
+        # Momentum scan-path entry ELIMINADO (criminal-pump only). El scan solo mantiene
+        # _candidates (radar interno) y alimenta el FSM. Las alertas + entradas salen
+        # EXCLUSIVAMENTE del FSM de acumulación (_emit_signal_alert / velocity_ruptura).
+        # NUNCA se compra un breakout perseguido (era el path "momentum" grade F).
     # Cross-exchange arbitrage detection (alert-only in paper).
     try:
         await _arbitrage_scan()
@@ -3095,6 +3078,7 @@ async def status(request: Request) -> dict:
         "candidate_count": len(_candidates),
         "reeval": _last_reeval,
         "kill_switch_active": bot.guard.kill_switch,
+        "kill_switch_reason": bot.guard.kill_reason,   # manual / "auto: rate-limit storm" / "auto: caída de volumen"
         "open_positions": bot.open_count(),
         "persistence": "supabase" if store.enabled() else "memory",
         "account_connected": bot.real_account.get("connected", []),

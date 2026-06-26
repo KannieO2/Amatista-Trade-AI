@@ -112,29 +112,68 @@ html.tradeos-light,html.tradeos-light body,html.tradeos-light #root{background:#
 #tradeos-grid-brand b{font-weight:600;letter-spacing:-.02em;color:var(--color-text-primary)}
 #tradeos-grid-brand span{color:var(--color-text-muted);font-weight:400;margin-left:5px}
 #tradeos-grid-navlabel{font-size:10px;letter-spacing:.14em;color:#4d5666;text-transform:uppercase;padding:14px 8px 6px;font-weight:600}
+/* El shell de TradeOS flota su topbar (toggle Pump/Grid + acciones) sobre el ÁREA DE
+   CONTENIDO del grid (no sobre el sidebar) → empuja el contenido hacia abajo para que el
+   topbar no lo tape. El sidebar (aside) con el logo Amatista queda intacto arriba. */
+#root #main-content{padding-top:64px!important}
 /* ===== Animaciones de paridad con el Pump Reader (riseIn + lift + sheen + floaty) ===== */
 @keyframes tos-rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
 @keyframes tos-floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
 @keyframes tos-pulse{50%{box-shadow:0 0 0 5px rgba(160,92,242,.05)}}
-/* tarjetas del grid (.bg-bg-elevated.rounded-lg = Card) = look del pump:
-   entrada escalonada + lift al hover + borde/glow morado + sheen superior */
-#root .bg-bg-elevated.rounded-lg{position:relative;
-  transition:transform .26s cubic-bezier(.16,1,.3,1),box-shadow .26s ease,border-color .26s ease!important;
-  animation:tos-rise .5s cubic-bezier(.16,1,.3,1) both}
-#root .bg-bg-elevated.rounded-lg:hover{transform:translateY(-3px);border-color:rgba(160,92,242,.30)!important;
-  box-shadow:0 32px 64px -28px rgba(0,0,0,.85),0 0 36px -12px rgba(160,92,242,.22)!important}
-#root .bg-bg-elevated.rounded-lg::after{content:"";position:absolute;top:0;left:14px;right:14px;height:1px;
-  background:linear-gradient(90deg,transparent,rgba(255,255,255,.26),transparent);pointer-events:none}
-/* entrada escalonada por orden de aparición */
-#root .bg-bg-elevated.rounded-lg:nth-child(2){animation-delay:.05s}
-#root .bg-bg-elevated.rounded-lg:nth-child(3){animation-delay:.10s}
-#root .bg-bg-elevated.rounded-lg:nth-child(4){animation-delay:.16s}
-#root .bg-bg-elevated.rounded-lg:nth-child(5){animation-delay:.22s}
+/* ENTRADA ESCALONADA de toda la vista (igual que .view>* del pump): cada sección de la
+   página (header, strips de KPIs, cards, grid de bots) entra en cascada al cargar.
+   El contenido del grid vive en #main-content > div (wrapper flex de cada página). */
+#root #main-content > div > *{animation:tos-rise .55s cubic-bezier(.16,1,.3,1) both}
+#root #main-content > div > *:nth-child(2){animation-delay:.05s}
+#root #main-content > div > *:nth-child(3){animation-delay:.10s}
+#root #main-content > div > *:nth-child(4){animation-delay:.16s}
+#root #main-content > div > *:nth-child(5){animation-delay:.22s}
+#root #main-content > div > *:nth-child(6){animation-delay:.28s}
+/* SUPERFICIES tipo tarjeta (Card .rounded-lg + strips de KPIs .rounded-lg) = lift +
+   glow morado al hover + sheen superior, como el pump. */
+#root .bg-bg-elevated.rounded-lg,#root #main-content > div > .rounded-lg{position:relative;
+  transition:transform .26s cubic-bezier(.16,1,.3,1),box-shadow .26s ease,border-color .26s ease!important}
+#root .bg-bg-elevated.rounded-lg:hover,#root #main-content > div > .rounded-lg:hover{transform:translateY(-3px);
+  border-color:rgba(160,92,242,.30)!important;box-shadow:0 32px 64px -28px rgba(0,0,0,.85),0 0 36px -12px rgba(160,92,242,.22)!important}
+#root .bg-bg-elevated.rounded-lg::after,#root #main-content > div > .rounded-lg::after{content:"";position:absolute;top:0;left:14px;right:14px;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.26),transparent);pointer-events:none;z-index:1}
+/* tiles de KPI individuales (bg-bg-elevated p-4): realce sutil al pasar el cursor */
+#root .bg-bg-elevated.p-4{transition:background .15s ease}
+#root .bg-bg-elevated.p-4:hover{background:rgba(255,255,255,.035)}
+/* tile "Crear bot nuevo" (dashed): ya tiene hover propio, solo le sumamos el lift */
+#root button.border-dashed:hover{transform:translateY(-3px);transition:transform .26s cubic-bezier(.16,1,.3,1)}
 /* números grandes con glow morado (igual que .kval del pump) */
 #root .text-2xl,#root .text-3xl,#root .text-4xl{text-shadow:0 0 30px rgba(160,92,242,.16)}
 /* gem flotante + dot de estado 'corriendo' pulsante */
 #tradeos-grid-brand .gem{animation:tos-floaty 4s ease-in-out infinite}
 #root .bg-success{animation:tos-pulse 1.8s infinite}
+/* ===== PARIDAD DE DISEÑO con el Pump Reader (solo CSS, sin tocar lógica) =====
+   Las cards del pump son glass: fondo translúcido + blur, borde claro fino, radio 14,
+   sombra profunda + sheen. Replicamos EXACTO sobre las superficies del grid para que
+   cambiar de tab no se note. */
+#root .bg-bg-elevated.rounded-lg{
+  background:rgba(16,21,30,.55)!important;
+  border:1px solid rgba(255,255,255,.09)!important;
+  border-radius:14px!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 22px 54px -30px rgba(0,0,0,.85),0 0 0 1px rgba(255,255,255,.015)!important;
+  backdrop-filter:blur(22px) saturate(160%);-webkit-backdrop-filter:blur(22px) saturate(160%);
+}
+/* Strips de KPI: de tira conectada (gap-px + divisores) → tarjetas glass SEPARADAS,
+   como las KPI cards del pump (grid con gap + cada una redondeada). */
+#root #main-content .grid.gap-px{gap:14px!important;background:transparent!important;overflow:visible!important}
+#root #main-content .grid.gap-px > .bg-bg-elevated{
+  border-radius:14px!important;border:1px solid rgba(255,255,255,.09)!important;
+  background:rgba(16,21,30,.55)!important;padding:16px!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 22px 54px -30px rgba(0,0,0,.85)!important;
+  backdrop-filter:blur(22px) saturate(160%);-webkit-backdrop-filter:blur(22px) saturate(160%);
+  transition:transform .26s cubic-bezier(.16,1,.3,1),box-shadow .26s ease,border-color .26s ease}
+#root #main-content .grid.gap-px > .bg-bg-elevated:hover{transform:translateY(-3px);
+  border-color:rgba(160,92,242,.30)!important;box-shadow:0 32px 64px -28px rgba(0,0,0,.85),0 0 36px -12px rgba(160,92,242,.22)!important}
+/* Modo claro: glass blanco (no el oscuro), para no romper el tema claro del pump. */
+html.tradeos-light #root .bg-bg-elevated.rounded-lg,
+html.tradeos-light #root #main-content .grid.gap-px > .bg-bg-elevated{
+  background:rgba(255,255,255,.72)!important;border-color:rgba(0,0,0,.06)!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 14px 34px -22px rgba(0,0,0,.16)!important}
 *{scrollbar-width:none!important;-ms-overflow-style:none!important}
 *::-webkit-scrollbar{width:0!important;height:0!important;display:none!important}
 </style>
