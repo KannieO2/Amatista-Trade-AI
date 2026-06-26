@@ -90,8 +90,9 @@ def _fatal_excepthook(exc_type, exc, tb) -> None:
 sys.excepthook = _fatal_excepthook
 
 # UPDATE cadence: chequea AHORA si hay oportunidad de entrar sobre los candidatos que
-# ya se monitorean (light scan). Default 3 min.
-SCAN_INTERVAL_SECONDS = int(os.getenv("PUMP_SCAN_INTERVAL_SECONDS", "180"))
+# ya se monitorean (light scan). 120s (antes 180): data de acumulación 50% más fresca al
+# FSM → confirma e ENTRA antes. Bump API moderado (semaphore + gather ya paralelizan).
+SCAN_INTERVAL_SECONDS = int(os.getenv("PUMP_SCAN_INTERVAL_SECONDS", "120"))
 # DISCOVER cadence: barrido COMPLETO de TODOS los tokens del exchange (full=True) que
 # arma/depura el universo de candidatos. Caro → 1×/día.
 DISCOVER_INTERVAL_SECONDS = int(os.getenv("PUMP_DISCOVER_INTERVAL_SECONDS", "86400"))
@@ -378,7 +379,9 @@ _forensics: ForensicsStore | None = None
 # Decision Log. Lee ventanas de micro_snapshots y las puntúa (scores.py). En modo
 # shadow (default) solo observa y registra; en enforcing gobierna las entradas.
 _pipeline: Pipeline | None = None
-PIPELINE_TICK_SECONDS = int(os.getenv("PUMP_FSM_TICK_SECONDS", "60"))
+# FSM tick 30s (antes 60): el estado acumulación→confirmación avanza 2× más rápido sobre la
+# data ya cacheada → entrada más temprana. GRATIS (CPU sobre snapshots existentes, sin API).
+PIPELINE_TICK_SECONDS = int(os.getenv("PUMP_FSM_TICK_SECONDS", "30"))
 
 
 @asynccontextmanager
@@ -2363,6 +2366,13 @@ EDGE_MIN_SCORE = float(os.getenv("PUMP_EDGE_MIN_SCORE", "0.5"))
 # de precio bajo; uno ya caro tiene poco espacio. Enfoca el universo PRE-PUMP a precio
 # bajo. 0 = desactivado. Solo PRE-PUMP (gainers es momentum, price-agnostic). Tunable.
 PREPUMP_MAX_PRICE = float(os.getenv("PUMP_PREPUMP_MAX_PRICE", "1.0"))
+# DISCRIMINADOR cargándose-vs-muerto. El acc-score usa tendencias RELATIVAS (vol↑ vs su
+# propia base), así que un libro MUERTO (24h ínfimo, ~$4k/h) puede puntuar acumulación por
+# ruido — un 1.3x sobre casi-nada sigue siendo nada (MTL $0.1M/24h ≈ $90/min = abandonado,
+# no carga criminal). El criminal que CARGA mueve dinero AHORA. Piso absoluto de flujo
+# reciente en USD/min ≈ (vol 24h / 1440) × spike. Separa "cargándose" (flujo real) de
+# "shitcoin muerta" (plana por abandono). 0 = desactivado. onchain_lead lo waivea. Tunable.
+PREPUMP_MIN_RECENT_VPM_USD = float(os.getenv("PUMP_PREPUMP_MIN_RECENT_VPM_USD", "600"))
 # Veto por CONCENTRACIÓN de holders (rug-prone): un solo whale (>25%) o el top-10 (>70%)
 # puede dumpear todo encima. Usa el dato on-chain ya calculado (holder_concentration).
 # Solo dispara cuando HAY cobertura DEX (CEX-only sin contrato no tiene el dato → pasa).
@@ -2656,6 +2666,20 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
             _record_learning(candidate.symbol, "skip_dead_book", "paper", candidate,
                              f"libro muerto (vol {(_vol_now or 0):.1f}x < {FSM_CONFIRM_MIN_VOL:.1f}x y plano +{runup:.1f}%)")
             return False
+        # (b) DISCRIMINADOR cargándose-vs-muerto — FLUJO RECIENTE real. El acc-score alto
+        # sobre un libro de 24h ínfimo es ruido relativo (1.3x sobre $4k/h = nada). El
+        # criminal que carga MUEVE dinero ahora; una shitcoin abandonada está plana porque
+        # está MUERTA, no porque la carguen. Piso absoluto de USD/min reciente (prorrateo
+        # 24h × spike) separa carga de abandono. onchain_lead lo waivea (la compra on-chain
+        # ES el flujo, días antes del mover en el venue).
+        if (not onchain_lead and PREPUMP_MIN_RECENT_VPM_USD > 0
+                and (candidate.quote_volume_24h or 0) > 0):
+            _vpm = (candidate.quote_volume_24h / 1440.0) * max(_vol_now or 1.0, 1.0)
+            if _vpm < PREPUMP_MIN_RECENT_VPM_USD:
+                _record_learning(candidate.symbol, "skip_dead_volume", "paper", candidate,
+                                 f"flujo reciente ${_vpm:,.0f}/min < ${PREPUMP_MIN_RECENT_VPM_USD:,.0f}/min "
+                                 f"(muerto: 24h ${candidate.quote_volume_24h/1e6:.2f}M × {(_vol_now or 1.0):.1f}x)")
+                return False
         # Incluso un LEAD on-chain exige volumen MÍNIMO: un libro muerto (NIL @1.9x perdió,
         # FTT @0.9x perdió) no entra solo por heat. LAYER (ganador) tuvo 2.1x → el piso separa.
         if onchain_lead and _entry_vol is not None and _entry_vol < FSM_ONCHAIN_MIN_VOL_FLOOR:
