@@ -1145,12 +1145,18 @@ function stateChip(s){const c=STATE_C[(s||"").toLowerCase()]||["var(--muted)","r
 // Paint the filled portion of a range slider up to its value (native track is flat gray).
 function fillRange(el){const v=Math.max(0,Math.min(100,Number(el.value)||0));
   el.style.background=`linear-gradient(90deg,var(--pink) ${v}%,var(--border) ${v}%)`;}
+let grvtLoaded=false;
 async function loadGrvt(){
   // The real GRVTBot renders itself inside the iframe (#grvt-frame), served
   // same-origin through the /grid/* reverse proxy. Nothing to render here — we
   // only probe the Node backend once so we can show a friendly note if it's
   // not running (otherwise the iframe just shows a blank/error page).
   const off=$("grvt-offline"), fr=$("grvt-frame");
+  // RAPIDEZ del paso pump↔grid: el SPA se monta UNA vez y se queda caliente. Los
+  // switches posteriores solo togglean visibilidad (el .view>* riseIn da la entrada)
+  // → cambio INSTANTÁNEO en vez de rebootear el bundle Node cada vez (antes: src con
+  // cache-buster Date.now() forzaba reload completo en cada click de "Grid Bot").
+  if(grvtLoaded){ if(off)off.style.display="none"; if(fr)fr.style.display="block"; return; }
   try{
     const r=await fetch("/grid/api/health",{cache:"no-store"});
     if(!r.ok) throw 0;
@@ -1168,6 +1174,7 @@ async function loadGrvt(){
       const t=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";
       fr.onload=()=>postGridTheme();           // sync theme once the SPA boots
       fr.src="/grid/dashboard/?theme="+t+"&sso="+Date.now();
+      grvtLoaded=true;                          // caliente: próximos switches = instantáneos
     }
   }catch(e){
     if(off) off.style.display="block";

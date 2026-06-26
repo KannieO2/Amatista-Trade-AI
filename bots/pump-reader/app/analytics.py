@@ -411,24 +411,27 @@ class AnalyticsEngine:
     # --- segmentation helpers ---
     def _by(self, attr: str) -> dict[str, list[TradeRecord]]:
         out: dict[str, list[TradeRecord]] = {}
-        for t in self.trades:
+        # DISPLAY del edge = solo data CONFIABLE (post-cutoff). Antes segmentaba sobre
+        # self.trades (todo, incl. historia contaminada/PnL viejo) → el panel mentía.
+        for t in self._trusted_trades():
             out.setdefault(getattr(t, attr, "?") or "?", []).append(t)
         return out
 
     # --- Module 2/3 segmented ---
     def expectancy(self) -> dict:
         return {
-            "global": expectancy_of(self.trades),
+            "global": expectancy_of(self._trusted_trades()),   # solo data fresca (post-cutoff)
             "by_setup": {k: expectancy_of(v) for k, v in self._by("setup_type").items()},
             "by_exchange": {k: expectancy_of(v) for k, v in self._by("exchange").items()},
             "by_regime": {k: expectancy_of(v) for k, v in self._by("market_regime").items()},
         }
 
     def profit_factor(self) -> dict:
+        _trusted = self._trusted_trades()
         def rolling(n):
-            return profit_factor_of(self.trades[-n:]) if len(self.trades) >= 1 else profit_factor_of([])
+            return profit_factor_of(_trusted[-n:]) if len(_trusted) >= 1 else profit_factor_of([])
         return {
-            "overall": profit_factor_of(self.trades),
+            "overall": profit_factor_of(_trusted),
             "by_setup": {k: profit_factor_of(v) for k, v in self._by("setup_type").items()},
             "by_exchange": {k: profit_factor_of(v) for k, v in self._by("exchange").items()},
             "by_regime": {k: profit_factor_of(v) for k, v in self._by("market_regime").items()},
@@ -456,12 +459,13 @@ class AnalyticsEngine:
     # --- Module 9 ---
     def drawdown(self) -> dict:
         now = datetime.now(UTC)
+        _trusted = self._trusted_trades()
         def window(days):
             cut = now - timedelta(days=days)
-            return [t for t in self.trades
+            return [t for t in _trusted
                     if (_safe_dt(t.exit_timestamp) or now) >= cut]
         return {
-            "overall": drawdown_of(self.trades),
+            "overall": drawdown_of(_trusted),
             "rolling_30d": drawdown_of(window(30)),
             "rolling_90d": drawdown_of(window(90)),
         }
@@ -470,13 +474,14 @@ class AnalyticsEngine:
     def edge_status(self) -> dict:
         """Compare the recent window vs the prior window; emit an edge label.
         ALERTS ONLY — never acts."""
-        n = len(self.trades)
+        _trusted = self._trusted_trades()
+        n = len(_trusted)
         if n < 2 * max(10, MIN_SAMPLE // 2):
             return {"status": "EDGE_STABLE", "reason": "insufficient history",
                     "samples": n}
         w = max(10, MIN_SAMPLE // 2)
-        recent = self.trades[-w:]
-        prior = self.trades[-2 * w:-w]
+        recent = _trusted[-w:]
+        prior = _trusted[-2 * w:-w]
         r_pf = profit_factor_of(recent)["profit_factor"]
         p_pf = profit_factor_of(prior)["profit_factor"]
         r_exp = expectancy_of(recent)["expectancy"] or 0
@@ -531,9 +536,10 @@ class AnalyticsEngine:
 
     # --- Module 11 ---
     def dashboard(self) -> dict:
-        ex = expectancy_of(self.trades)
-        pf = profit_factor_of(self.trades)
-        dd = drawdown_of(self.trades)
+        _t = self._trusted_trades()   # panel del edge = SOLO data fresca (post-cutoff), no todo
+        ex = expectancy_of(_t)
+        pf = profit_factor_of(_t)
+        dd = drawdown_of(_t)
         ranking = self.setup_ranking()
         # Break-even win rate the current payoff demands: BE = avgLoss/(avgWin+avgLoss)
         # = 1/(1+R:R). Below it the edge is negative no matter how it "feels".
@@ -546,7 +552,7 @@ class AnalyticsEngine:
         wr = ex["win_rate"]
         edge_ok = (wr is not None) and (wr >= be_wr)
         return {
-            "total_trades": len(self.trades),
+            "total_trades": len(_t),
             "win_rate": ex["win_rate"], "loss_rate": ex["loss_rate"],
             "breakeven_wr": be_wr, "rr": rr, "edge_ok": edge_ok,
             "win_margin": (round(wr - be_wr, 4) if wr is not None else None),

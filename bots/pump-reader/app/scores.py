@@ -27,7 +27,11 @@ from statistics import mean
 EPS = 1e-9
 
 # --- constantes de normalización (a calibrar con datos de Fase 1) -------------
-FLAT_PRICE_BAND = float(os.getenv("PUMP_F2_FLAT_PRICE_BAND", "0.02"))   # |Δprecio| "plano"
+FLAT_PRICE_BAND = float(os.getenv("PUMP_F2_FLAT_PRICE_BAND", "0.02"))   # |Δprecio| neto "plano"
+# Excursión high-low de la ventana "plana". Acumulación real = rango ESTRECHO; un pump que
+# sube y vuelve tiene rango ANCHO pero deriva endpoint ~0 → leía flat≈1 y re-confirmaba sobre
+# el residuo post-pump (el re-entry de BREV: +7.4% rango, 8.2x volumen, "plano" falso).
+FLAT_RANGE_BAND = float(os.getenv("PUMP_F2_FLAT_RANGE_BAND", "0.06"))
 HEALTHY_IMB_LO = float(os.getenv("PUMP_F2_IMB_LO", "0.60"))            # imbalance comprador sano
 HEALTHY_IMB_HI = float(os.getenv("PUMP_F2_IMB_HI", "0.85"))           # por encima = blow-off
 PERSIST_IMB_MIN = float(os.getenv("PUMP_F2_PERSIST_IMB", "0.65"))     # imbalance "sostenido"
@@ -100,8 +104,13 @@ def accumulation_score(W: list[dict]) -> tuple[int, dict]:
     if len(W) < MIN_WINDOW:
         return 0, {}
     price = _col(W, "last_price")
-    price_move = abs(price[-1] - price[0]) / (abs(price[0]) + EPS)
-    flat = _clamp(1.0 - price_move / FLAT_PRICE_BAND)        # 1 plano … 0 se movió >banda
+    p0 = abs(price[0]) + EPS
+    # 'flat' = el precio NO se movió. Se toma la PEOR (min) de dos medidas para no leer plano
+    # un pump que sube y vuelve (el spike intermedio que la deriva endpoint no ve):
+    #   drift = inicio vs fin (deriva neta)   ·   range = excursión high-low de la ventana
+    flat_drift = _clamp(1.0 - (abs(price[-1] - price[0]) / p0) / FLAT_PRICE_BAND)
+    flat_range = _clamp(1.0 - ((max(price) - min(price)) / p0) / FLAT_RANGE_BAND)
+    flat = min(flat_drift, flat_range)                      # 1 plano … 0 se movió >banda
 
     f_vol_flat = _clamp(_rel_trend(_col(W, "volume"))) * flat        # vol↑ con precio plano
     f_bid = _clamp(_rel_trend(_col(W, "bid_depth")))                 # profundidad bid↑

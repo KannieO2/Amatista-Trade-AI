@@ -52,6 +52,19 @@ def configured_exchanges() -> list[str]:
 # STOP_LOSS_PCT = float(os.getenv("PUMP_STOP_LOSS_PCT", "8"))
 # TAKE_PROFIT_PCT = float(os.getenv("PUMP_TAKE_PROFIT_PCT", "25"))
 SLIPPAGE_PCT = float(os.getenv("PUMP_PAPER_SLIPPAGE_PCT", "0.5"))
+# Costo realista del fill (paper antes mentía: solo slippage de ENTRADA, sin fee, sin
+# impacto). taker fee por lado + IMPACTO de mercado: una orden grande contra un libro
+# thin mueve el precio en contra. Sin esto las "ganancias" en microcaps eran fantasía.
+FEE_PCT = float(os.getenv("PUMP_PAPER_FEE_PCT", "0.1"))            # taker, por lado
+IMPACT_COEF = float(os.getenv("PUMP_PAPER_IMPACT_COEF", "1.0"))    # impacto = coef·notional/profundidad
+
+
+def market_impact_pct(notional_usd: float, book_depth_usd: float | None) -> float:
+    """Slippage por IMPACTO de mercado en %: una orden grande vs un libro thin mueve el
+    precio. coef·(notional/profundidad)·100. Sin libro/orden → 0. Compartido entry+exit."""
+    if not book_depth_usd or book_depth_usd <= 0 or notional_usd <= 0:
+        return 0.0
+    return IMPACT_COEF * (notional_usd / book_depth_usd) * 100.0
 
 # --- Iceberg (anti-slippage) ------------------------------------------------
 # Si el notional de un leg supera ICEBERG_DEPTH_PCT% de la profundidad del libro,
@@ -111,12 +124,16 @@ class ExecutionResult:
 class PaperBroker:
     """Simulated fills off a provided reference price. No network, no money."""
 
-    def place(self, leg: OrderLeg, slices: int = 1) -> Fill:
+    def place(self, leg: OrderLeg, slices: int = 1, book_depth_usd: float | None = None) -> Fill:
         # Iceberg: partir reduce el slippage promedio ~/ sqrt(slices) (regla de
         # microestructura: cada slice come menos profundidad). slices=1 → directo.
-        eff_slip = SLIPPAGE_PCT / (slices ** 0.5) if slices > 1 else SLIPPAGE_PCT
+        base_slip = SLIPPAGE_PCT / (slices ** 0.5) if slices > 1 else SLIPPAGE_PCT
+        # + IMPACTO de mercado (tamaño vs profundidad del libro) → realista en microcaps.
+        eff_slip = base_slip + market_impact_pct(leg.notional_usd, book_depth_usd)
         slip = 1 + eff_slip / 100 if leg.side == Side.buy else 1 - eff_slip / 100
-        fill_price = leg.entry_price * slip
+        # + taker fee: el buy paga, sube el costo por moneda (recibes menos cantidad).
+        fee = 1 + FEE_PCT / 100 if leg.side == Side.buy else 1 - FEE_PCT / 100
+        fill_price = leg.entry_price * slip * fee
         amount = leg.notional_usd / fill_price if fill_price > 0 else 0.0
         return Fill(
             id=str(uuid4()),
@@ -303,7 +320,7 @@ class ExecutionEngine:
             slices = _iceberg_slices(per_leg, book_depth_usd)
             try:
                 fill = (await self.live.place(leg, slices) if mode == ExecMode.live
-                        else self.paper.place(leg, slices))
+                        else self.paper.place(leg, slices, book_depth_usd=book_depth_usd))
             except Exception as exc:  # noqa: BLE001 - surface broker errors as rejections, never crash
                 result.rejected.append(f"{exchange}: {exc}")
                 continue

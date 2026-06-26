@@ -43,7 +43,15 @@ from .analytics import get_engine as get_analytics
 from .events import EXIT_REASON_EVENT, EventType, get_bus
 from .account import real_balances
 from .dashboard import DASHBOARD_HTML
-from .executor import ExecMode, ExecutionEngine, Side, current_mode
+from .executor import (
+    FEE_PCT,
+    SLIPPAGE_PCT,
+    ExecMode,
+    ExecutionEngine,
+    Side,
+    current_mode,
+    market_impact_pct,
+)
 from .grid import GridBot, backtest, fetch_ohlcv_for, fetch_price
 from .grvt_proxy import register_grvt_proxy, set_grid_token_provider
 from .market import market_for_symbol
@@ -1158,6 +1166,13 @@ async def _emit_signal_alert(cand: TokenCandidate, scores, tier: str = "ahora",
         runup, _ = _breakout_state(getattr(cand, "spark", None) or [])
         if cand.price_change_pct_24h >= ALERT_LEADING_MAX_CHASE_PCT or runup >= ENTRY_MAX_RUNUP_PCT:
             return
+    # SOLO ALERTA LO VIVO: un libro sin flujo reciente real (dead) puntúa acumulación por
+    # ruido relativo pero NADIE compra → no es criminal-pump, es shitcoin muerta. Mismo piso
+    # que la entrada (skip_dead_volume) → el feed deja de alertar muertos (ALT 0.1x, SOLV 0.5x);
+    # los reales con carga (HOT 5x) sí pasan. Sin esto la alerta y la entrada divergían.
+    _vpm = (getattr(cand, "quote_volume_24h", 0.0) / 1440.0) * max(getattr(cand, "volume_spike", 1.0) or 1.0, 1.0)
+    if PREPUMP_MIN_RECENT_VPM_USD > 0 and _vpm < PREPUMP_MIN_RECENT_VPM_USD:
+        return
     key = f"{tier}:{cand.exchange}:{cand.symbol}"
     now = datetime.now(UTC).timestamp()
     last = _signal_alert_at.get(key)
@@ -1614,6 +1629,20 @@ async def _restore_positions() -> None:
                     book=bk, at=r.get("at") or "",
                 ))
             bot.pm.history = hist
+            # Siembra el cooldown de re-entrada desde los exits persistidos: un restart
+            # no debe reabrir la ventana de re-compra (si BREV cerró hace 1h, sigue veto).
+            for r in rex:
+                ex, sym, at = r.get("exchange", ""), r.get("symbol", ""), r.get("at")
+                if ex and sym and at:
+                    try:
+                        t = datetime.fromisoformat(at)
+                        if t.tzinfo is None:
+                            t = t.replace(tzinfo=UTC)   # naive → UTC-aware (gate resta now(UTC))
+                        k = f"{ex}:{sym}"
+                        if k not in _last_exit_at or t > _last_exit_at[k]:
+                            _last_exit_at[k] = t
+                    except Exception:
+                        pass
         except Exception:
             logger.exception("recent exits rehydrate failed for %s", bot.uid)
         # Seed a baseline equity point so the curve never renders flat-zero after a
@@ -1688,6 +1717,9 @@ async def _handle_exit(bot: UserBot, pos, event) -> None:
                 _pipeline.mark_closed(pos.symbol, pos.exchange)
             except Exception:
                 logger.exception("pipeline mark_closed failed")
+        # RE-ENTRY COOLDOWN: estampa el cierre → el gate de entrada veta re-comprar este
+        # símbolo por REENTRY_COOLDOWN_S (el pump ya pasó). Se hace en el cierre TOTAL.
+        _last_exit_at[f"{pos.exchange}:{pos.symbol}"] = datetime.now(UTC)
         # Exit-engine telemetry (Phase D-0.5): signal/entry/exit timing, where the
         # triggering price came from, and how the protective stops armed.
         tel_row = {
@@ -2373,6 +2405,13 @@ PREPUMP_MAX_PRICE = float(os.getenv("PUMP_PREPUMP_MAX_PRICE", "1.0"))
 # reciente en USD/min ≈ (vol 24h / 1440) × spike. Separa "cargándose" (flujo real) de
 # "shitcoin muerta" (plana por abandono). 0 = desactivado. onchain_lead lo waivea. Tunable.
 PREPUMP_MIN_RECENT_VPM_USD = float(os.getenv("PUMP_PREPUMP_MIN_RECENT_VPM_USD", "600"))
+# RE-ENTRY COOLDOWN: tras CERRAR un símbolo, no re-entrarlo por N horas. El pump criminal
+# ya ocurrió — sobre todo en un WIN (el trailing capturó el tope) → re-entrar es comprar el
+# cadáver/dump. Caso real: BREV ganó +4.13 por trailing y re-entró 16 min después MÁS ARRIBA
+# de la venta, sangrando. Aplica a wins Y losses (un símbolo recién cerrado NO es pre-pump).
+# 0 = desactivado. Tunable. _last_exit_at se siembra al rehidratar (sobrevive restart).
+REENTRY_COOLDOWN_S = int(os.getenv("PUMP_REENTRY_COOLDOWN_S", "21600"))   # 6h
+_last_exit_at: dict[str, datetime] = {}    # "exchange:symbol" -> hora de cierre
 # Veto por CONCENTRACIÓN de holders (rug-prone): un solo whale (>25%) o el top-10 (>70%)
 # puede dumpear todo encima. Usa el dato on-chain ya calculado (holder_concentration).
 # Solo dispara cuando HAY cobertura DEX (CEX-only sin contrato no tiene el dato → pasa).
@@ -2629,6 +2668,17 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
                 _record_learning(candidate.symbol, "skip_regime_unknown", "paper", candidate,
                                  f"régimen sin clasificar ({get_analytics().regime or 'n/a'}) — sin contexto, abstención")
                 return False
+        # (a-1) RE-ENTRY COOLDOWN — el pump ya ocurrió: un símbolo recién cerrado no es
+        # pre-pump, re-entrarlo es comprar el dump (BREV ganó y re-entró 16 min después,
+        # sangrando). Veta re-comprar por REENTRY_COOLDOWN_S desde el cierre. Wins Y losses.
+        _lx = _last_exit_at.get(f"{candidate.exchange}:{candidate.symbol}")
+        if _lx is not None and REENTRY_COOLDOWN_S > 0:
+            _elapsed = (datetime.now(UTC) - _lx).total_seconds()
+            if _elapsed < REENTRY_COOLDOWN_S:
+                _record_learning(candidate.symbol, "skip_reentry_cooldown", "paper", candidate,
+                                 f"cerrado hace {_elapsed/3600:.1f}h < {REENTRY_COOLDOWN_S/3600:.1f}h cooldown "
+                                 f"(pump ya pasó — no re-comprar el dump)")
+                return False
         # (a0) SCORE FLOOR — rigidez: a sub-quality calificación never enters, even with
         # an on-chain lead. Cuts the measured junk (HYPER 36, ZKC 33) that bled the book.
         _pscore = int(getattr(candidate, "pump_score", 0) or 0)
@@ -2856,6 +2906,7 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
             qty=fill.amount, pump_score=candidate.pump_score, classification=candidate.classification,
             cluster=candidate.cluster, confidence=candidate.confidence_score,
             book=book, entry_phase=entry_phase, signal_at=candidate.updated_at,
+            liquidity_usd=candidate.liquidity_usd,   # libro al entrar → impacto de salida realista
         )
         opened = bot.pm.positions.get(bot.pm.key(fill.exchange, fill.symbol))
         if opened:
@@ -3452,6 +3503,15 @@ async def list_positions(request: Request) -> list[dict]:
     return [fill.__dict__ | {"side": fill.side.value, "mode": fill.mode.value} for fill in bot.engine.positions]
 
 
+def _net_exit_price(p) -> float:
+    """Precio NETO si vendieras YA: last menos el costo de salida realista (slippage base +
+    impacto tamaño-vs-libro + fee taker). El flotante muestra lo que de verdad netearías,
+    no el mid limpio (que infla el unrealized igual que inflaba las ganancias cerradas)."""
+    cost = (SLIPPAGE_PCT + market_impact_pct(p.last_price * p.qty,
+            getattr(p, "entry_liquidity_usd", 0.0) or None) + FEE_PCT) / 100.0
+    return p.last_price * (1.0 - cost)
+
+
 @app.get("/managed")
 async def list_managed(request: Request) -> dict:
     bot = _req_bot(request)
@@ -3469,9 +3529,10 @@ async def list_managed(request: Request) -> dict:
             "book": getattr(p, "book", "prepump"),   # prepump (FSM) | gainers (velocity)
             "entry_phase": getattr(p, "entry_phase", "ruptura"),  # lead | ruptura | momentum (badge honesto)
             "confidence": round(p.confidence, 0),
-            "gain_pct": round((p.last_price - p.entry_price) / p.entry_price * 100, 2) if p.entry_price else 0.0,
+            # gain/unrealized NETOS del costo de salida realista (lo que netearías al vender ya)
+            "gain_pct": round((_net_exit_price(p) - p.entry_price) / p.entry_price * 100, 2) if p.entry_price else 0.0,
             "realized_pnl": round(p.realized_pnl, 4),
-            "unrealized_pnl": round((p.last_price - p.entry_price) * p.qty, 4),
+            "unrealized_pnl": round((_net_exit_price(p) - p.entry_price) * p.qty, 4),
         }
         for p in bot.pm.positions.values()
         if not p.closed

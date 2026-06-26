@@ -3,59 +3,59 @@
  * Any deviation here MUST update the design doc first.
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap');
 @import 'tailwindcss';
 
 @theme {
-  /* Background hierarchy */
-  --color-bg-base: #020617;
-  --color-bg-surface: #0b1120;
-  --color-bg-elevated: #0f172a;
-  --color-bg-muted: #1a2236;
+  /* Background hierarchy — parity con Pump Reader (mismo dark Amatista) */
+  --color-bg-base: #080b11;
+  --color-bg-surface: #0c1018;
+  --color-bg-elevated: #0f141d;
+  --color-bg-muted: #131a25;
 
   /* Borders */
-  --color-border-subtle: #1e293b;
-  --color-border-default: #334155;
-  --color-border-strong: #475569;
+  --color-border-subtle: #151c28;
+  --color-border-default: #1b2333;
+  --color-border-strong: #2a3344;
 
   /* Text */
-  --color-text-primary: #f8fafc;
-  --color-text-secondary: #cbd5e1;
-  --color-text-muted: #94a3b8;
-  --color-text-disabled: #64748b;
+  --color-text-primary: #e7ebf2;
+  --color-text-secondary: #9aa5b8;
+  --color-text-muted: #6f7a8e;
+  --color-text-disabled: #566173;
 
-  /* Semantic */
-  --color-success: #22c55e;
-  --color-success-strong: #16a34a;
-  --color-success-soft: #022c16;
-  --color-danger: #ef4444;
-  --color-danger-strong: #dc2626;
-  --color-danger-soft: #2c0b0b;
-  --color-warning: #f59e0b;
-  --color-warning-strong: #d97706;
-  --color-warning-soft: #2c1b05;
-  --color-info: #38bdf8;
+  /* Semantic — verde/rojo/ámbar del Pump */
+  --color-success: #2fd08a;
+  --color-success-strong: #27b377;
+  --color-success-soft: #06251a;
+  --color-danger: #e8556a;
+  --color-danger-strong: #d63d54;
+  --color-danger-soft: #2a0f14;
+  --color-warning: #e6a23c;
+  --color-warning-strong: #c8862a;
+  --color-warning-soft: #2a1d08;
+  --color-info: #3d7bff;
 
-  /* Primary accent */
-  --color-primary: #38bdf8;
-  --color-primary-strong: #0ea5e9;
-  --color-primary-soft: #0c2a3a;
+  /* Primary accent — el morado Amatista (#a05cf2), idéntico al Pump */
+  --color-primary: #a05cf2;
+  --color-primary-strong: #8b4fd6;
+  --color-primary-soft: #1a1030;
 
-  /* Chart series */
-  --color-chart-1: #38bdf8;
-  --color-chart-2: #22c55e;
-  --color-chart-3: #f59e0b;
-  --color-chart-4: #a78bfa;
-  --color-chart-5: #f472b6;
-  --color-chart-6: #94a3b8;
+  /* Chart series — alineadas al palette Amatista */
+  --color-chart-1: #a05cf2;
+  --color-chart-2: #2fd08a;
+  --color-chart-3: #e6a23c;
+  --color-chart-4: #8b86f2;
+  --color-chart-5: #c79cf5;
+  --color-chart-6: #6f7a8e;
 
   /* Candlestick */
-  --color-candle-up: #22c55e;
-  --color-candle-down: #ef4444;
+  --color-candle-up: #2fd08a;
+  --color-candle-down: #e8556a;
 
-  /* Fonts */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', Monaco, Consolas, monospace;
+  /* Fonts — Geist, igual que Pump */
+  --font-sans: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', 'SF Mono', Monaco, Consolas, monospace;
 
   /* Spacing — 4px grid (Tailwind already covers most; these are aliases) */
   --spacing-0_5: 0.125rem;
@@ -84,35 +84,35 @@
  * but get darker shades for AA contrast on a near-white background.
  */
 html[data-theme='light'] {
-  --color-bg-base: #f8fafc;
+  --color-bg-base: #eef1f7;
   --color-bg-surface: #ffffff;
-  --color-bg-elevated: #ffffff;
-  --color-bg-muted: #f1f5f9;
+  --color-bg-elevated: #f6f8fc;
+  --color-bg-muted: #eaeef6;
 
-  --color-border-subtle: #e2e8f0;
-  --color-border-default: #cbd5e1;
+  --color-border-subtle: #e4e9f2;
+  --color-border-default: #d7deea;
   --color-border-strong: #94a3b8;
 
-  --color-text-primary: #0f172a;
-  --color-text-secondary: #334155;
-  --color-text-muted: #64748b;
+  --color-text-primary: #0f1622;
+  --color-text-secondary: #4d5973;
+  --color-text-muted: #7a869b;
   --color-text-disabled: #94a3b8;
 
-  /* Semantic — use darker shades to keep ≥4.5:1 contrast on white */
-  --color-success: #15803d;
-  --color-success-strong: #166534;
+  /* Semantic — darker shades para ≥4.5:1 sobre near-white (palette Pump light) */
+  --color-success: #10a86a;
+  --color-success-strong: #0c8a56;
   --color-success-soft: #dcfce7;
-  --color-danger: #b91c1c;
-  --color-danger-strong: #991b1b;
+  --color-danger: #d83a52;
+  --color-danger-strong: #b91c1c;
   --color-danger-soft: #fee2e2;
   --color-warning: #b45309;
   --color-warning-strong: #92400e;
   --color-warning-soft: #fef3c7;
-  --color-info: #0369a1;
+  --color-info: #2563eb;
 
-  --color-primary: #0284c7;
-  --color-primary-strong: #0369a1;
-  --color-primary-soft: #e0f2fe;
+  --color-primary: #8b4fd6;
+  --color-primary-strong: #7437c4;
+  --color-primary-soft: #f0e7fb;
 }
 
 /* Base body styles */

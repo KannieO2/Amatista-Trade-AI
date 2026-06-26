@@ -22,6 +22,10 @@ import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+# Costo realista de SALIDA (mismo modelo que el entry en executor): un market SELL llena
+# bajo el mid (slippage base + impacto por tamaño vs profundidad) y paga fee taker.
+from .executor import FEE_PCT, SLIPPAGE_PCT, market_impact_pct
+
 # NOTE: hard_stop / dump / dynamic_stop / timeout / max_hold / breakeven NO viven
 # como constantes aquí: los lee exit_profile() desde os.getenv EN VIVO para que el
 # auto-optimizador de 24h los retunee sin reinicio (ver exit_profile + CLUSTER_TUNE).
@@ -158,6 +162,8 @@ class ManagedPosition:
     dynamic_stop: float = 0.0     # trailing stop off the peak (full position, ratchets up only)
     peak_volume: float = 0.0      # max 1m volume seen during the trade (fuel gauge)
     last_volume: float = 0.0      # latest 1m volume (vs peak → alive / faded)
+    entry_liquidity_usd: float = 0.0  # profundidad del libro al entrar → impacto de SALIDA
+    entry_notional_usd: float = 0.0   # tamaño $ al entrar (telemetría del costo)
     stale_since: datetime | None = None  # first tick with no valid price (ghost reaper)
     vol_fade_since: datetime | None = None  # first tick where 1m buy volume fell below alive-frac (responsive vol-collapse cut)
     # --- telemetry only (never affect exit decisions) ---
@@ -197,7 +203,8 @@ class PositionManager:
     def open(self, *, symbol: str, exchange: str, entry_price: float, qty: float,
              pump_score: int = 0, classification: str = "n/a", cluster: str = "n/a",
              confidence: float = 100.0, book: str = "prepump", entry_phase: str = "ruptura",
-             signal_at: datetime | None = None, now: datetime | None = None) -> None:
+             signal_at: datetime | None = None, liquidity_usd: float = 0.0,
+             now: datetime | None = None) -> None:
         if entry_price <= 0 or qty <= 0:
             return
         now = now or datetime.now(UTC)
@@ -206,7 +213,8 @@ class PositionManager:
             initial_qty=qty, entry_at=now, peak_price=entry_price, peak_at=now,
             last_price=entry_price, pump_score=pump_score, classification=classification,
             cluster=cluster, confidence=confidence, book=book, entry_phase=entry_phase,
-            signal_at=signal_at,
+            signal_at=signal_at, entry_liquidity_usd=liquidity_usd,
+            entry_notional_usd=round(entry_price * qty, 2),
         )
 
     def step(self, key: str, price: float, volume: float | None = None,
@@ -334,14 +342,19 @@ class PositionManager:
 
     def _sell(self, pos: ManagedPosition, price: float, fraction: float, reason: str) -> ExitEvent:
         sell_qty = pos.qty if fraction >= 1.0 else pos.qty * fraction
-        pnl = (price - pos.entry_price) * sell_qty
+        # REALISMO: un market SELL llena BAJO el mid (slippage base + IMPACTO por tamaño vs
+        # profundidad del libro de entrada) y paga fee taker. Antes vendía al mid limpio sin
+        # fee → inflaba cada ganancia (las wins fantasma en libros thin). eff_price = real.
+        exit_slip = SLIPPAGE_PCT + market_impact_pct(price * sell_qty, pos.entry_liquidity_usd or None)
+        eff_price = price * (1 - exit_slip / 100) * (1 - FEE_PCT / 100)
+        pnl = (eff_price - pos.entry_price) * sell_qty
         pos.qty -= sell_qty
         pos.realized_pnl += pnl
         closed = pos.qty <= 1e-12
         pos.closed = pos.closed or closed
         event = ExitEvent(
             symbol=pos.symbol, exchange=pos.exchange, reason=reason,
-            sold_qty=round(sell_qty, 8), price=round(price, 8), pnl=round(pnl, 4),
+            sold_qty=round(sell_qty, 8), price=round(eff_price, 8), pnl=round(pnl, 4),
             fraction=round(fraction, 3), closed=closed, book=pos.book,
         )
         self.history.append(event)
