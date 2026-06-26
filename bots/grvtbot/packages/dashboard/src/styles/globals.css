@@ -211,3 +211,38 @@ pre {
 *::-webkit-scrollbar-thumb:hover {
   background: var(--color-border-strong);
 }
+
+/* ── Pump parity: entrada escalonada + spring (igual que el dashboard pump) ──
+ * riseIn sobre los bloques top-level del contenido (#main-content) da el mismo
+ * "alive" que el pump (.view>* riseIn). Solo transform/opacity → 60fps, no toca
+ * el layout ni los fondos (seguro). Respeta prefers-reduced-motion (arriba). */
+@keyframes riseIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+#main-content > * {
+  animation: riseIn 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+#main-content > *:nth-child(2) { animation-delay: 0.05s; }
+#main-content > *:nth-child(3) { animation-delay: 0.1s; }
+#main-content > *:nth-child(4) { animation-delay: 0.16s; }
+#main-content > *:nth-child(5) { animation-delay: 0.22s; }
+
+/* Spring en clickables que ya tienen transición de color → micro-feedback pump */
+a,
+button,
+[role='button'] {
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+a:active,
+button:active,
+[role='button']:active {
+  transform: translateY(0.5px);
+}

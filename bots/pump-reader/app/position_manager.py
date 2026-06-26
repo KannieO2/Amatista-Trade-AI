@@ -131,7 +131,7 @@ def exit_profile(cluster: str, book: str = "prepump") -> dict:
         # se volvían stop completo, no recuperación. Tightened a 5% (1.7× la banda lateral
         # ±3% → deja margen al shakeout normal pero corta el desastre). Esto baja avg_loss
         # ~37% sin tocar las ganadoras. Tunable (0 = volver al hard-stop por-cluster).
-        hs = float(os.getenv("PUMP_PREPUMP_HARD_STOP_PCT", "5"))
+        hs = float(os.getenv("PUMP_PREPUMP_HARD_STOP_PCT", "4"))
         if hs > 0:
             base["hard_stop_pct"] = hs
     return base

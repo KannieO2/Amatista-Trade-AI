@@ -1861,6 +1861,11 @@ async def _optimize_tp_sl() -> None:
             trail = max(3.0, min(10.0, round(opt["avg_loss"] * 1.5, 1)))
             os.environ["PUMP_DYNAMIC_STOP_PCT"] = str(trail)
             os.environ["PUMP_STOP_LOSS_PCT"] = str(opt["sl"])
+            # GAP fix: el book prepump usa su PROPIO override (PUMP_PREPUMP_HARD_STOP_PCT)
+            # que el optimizer NO tocaba → el hard-stop de TODOS los trades quedaba fijo, sin
+            # auto-afinar. Lo atamos al stop aprendido pero en banda APRETADA [3,6]: corta el
+            # sangrado temprano (fuera de la banda lateral ±3%) y nunca deja correr a -8%.
+            os.environ["PUMP_PREPUMP_HARD_STOP_PCT"] = str(max(3.0, min(6.0, opt["sl"])))
             # P3: break-even auto-tune. Arm at ~40% of the typical win so a trade
             # only locks no-loss AFTER a real move — never so low it scratches a live
             # pump on a tiny wiggle (that capped wins at ~$0.9). Looser band [2.5, 6]
