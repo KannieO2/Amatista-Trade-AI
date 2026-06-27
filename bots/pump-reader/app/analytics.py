@@ -612,7 +612,9 @@ class AnalyticsEngine:
         }
 
     def recent(self, limit: int = 50) -> list[dict]:
-        return [t.to_row() for t in self.trades[-limit:][::-1]]
+        # Respeta el cutoff (PUMP_DATA_CLEAN_SINCE): tras un reset, el panel Trades
+        # muestra SOLO los trades del periodo limpio — no resucita los viejos.
+        return [t.to_row() for t in self._trusted_trades()[-limit:][::-1]]
 
 
 _engine = AnalyticsEngine()
