@@ -1444,6 +1444,8 @@ async def _try_onchain_entry(exchange: str, symbol: str, fsm_row: dict, info: di
 async def _onchain_loop() -> None:
     from . import dexscreener as _dx
     from . import onchain as _oc
+    from . import crossexchange as _cx
+    from . import derivatives as _dv
     try:
         from . import etherscan as _es
     except Exception:
@@ -1468,11 +1470,22 @@ async def _onchain_loop() -> None:
                             inflow = await _es.exchange_inflows(ex, base, price=0.0)
                         except Exception:
                             inflow = None
-                    if not (dex or inflow):
+                    # Free "outside" leads: cross-exchange lead-lag + derivatives funding/OI.
+                    # Computed even when there's no DEX so they can be the ONLY signal.
+                    lead = deriv = None
+                    try:
+                        _c0 = _find_candidate(ex, sym)
+                        if _c0 is not None:
+                            lead = await _cx.lead_divergence(base, ex, _c0.last_price)
+                        deriv = await _dv.deriv_signal(base)
+                    except Exception:
+                        lead = deriv = None
+                    if not (dex or inflow or lead or deriv):
                         continue
-                    heat = _onchain_heat_score(dex, inflow)
-                    info = {"dex": dex, "inflow": inflow, "heat": heat,
-                            "at": datetime.now(UTC).isoformat()}
+                    heat = int(min(100, _onchain_heat_score(dex, inflow)
+                                   + _cx.lead_heat(lead) + _dv.deriv_heat(deriv)))
+                    info = {"dex": dex, "inflow": inflow, "lead": lead, "deriv": deriv,
+                            "heat": heat, "at": datetime.now(UTC).isoformat()}
                     # Contract security (GoPlus): honeypot / blacklist / cannot-sell /
                     # high sell-tax = rug INTENT → Dangerous_Signals. Only DEX-covered
                     # tokens (a contract exists to check); cached 2h so it's cheap per loop.
