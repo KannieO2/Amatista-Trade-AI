@@ -295,65 +295,87 @@ def score_candidate(
     low_liquidity = liquidity_usd < LOW_LIQUIDITY_USD
     w = LEARNED_WEIGHTS
 
-    # --- long_pump (buyer impulse): volume explosion + price run + stacked bids
+    # Real pump REQUIRES live volume (real flow). A token whose volume is BELOW its
+    # own recent average (spike < 1) is NOT pumping no matter how price/book look —
+    # both paths get damped hard. This is the core fix: it stopped DOLO/XPL/W (vol
+    # 0.3-0.5x, already reverting) from scoring 77 off pure momentum + a bid wall.
+    dead_volume = volume_spike < 1.0
+
+    # --- long_pump (buyer impulse): live volume + EARLY ignition + genuine buy
+    #     pressure + thin book. Momentum that ALREADY ran is PENALIZED — a pre-pump
+    #     detector must reward the START of a move, never an exhausted one.
     lp_vol = 0.0
     if volume_spike >= 10:
         lp_vol = 45
         flags.append("extreme_volume_spike")
     elif volume_spike >= 6:
-        lp_vol = 35
+        lp_vol = 38
         flags.append("high_volume_spike")
     elif volume_spike >= 3:
-        lp_vol = 25
+        lp_vol = 28
         flags.append("volume_spike")
+    elif volume_spike >= 2:
+        lp_vol = 16
     lp_price = 0.0
-    if price_change_pct >= 50:
-        lp_price = 35
-        flags.append("price_parabolic")
-    elif price_change_pct >= 25:
-        lp_price = 25
-        flags.append("price_running")
-    elif price_change_pct >= 10:
-        lp_price = 15
+    if 1 <= price_change_pct < 12:
+        lp_price = 22          # igniting, runway left = the pre-pump sweet spot
+    elif 12 <= price_change_pct < 25:
+        lp_price = 12          # moving, later
+    elif 25 <= price_change_pct < 45:
+        lp_price = 2
+    elif price_change_pct >= 45:
+        lp_price = -25         # already ran = NOT a pre-pump
+        flags.append("exhausted")
     lp_imb = 0.0
-    if imbalance >= 0.80:
+    if imbalance >= 0.85:
+        lp_imb = -8            # extreme wall = fake / no-pump tell
+        flags.append("fake_wall")
+    elif imbalance >= 0.65:
         lp_imb = 20
         flags.append("bids_stacked")
-    elif imbalance >= 0.65:
-        lp_imb = 10
+    elif imbalance >= 0.55:
+        lp_imb = 12
+    elif 0 < imbalance < 0.45:
+        lp_imb = -10           # ask-heavy = sellers dominate = dump, not pump
+        flags.append("sell_side")
     lp_liq = 0.0
     if low_liquidity and volume_spike >= 3:
-        # Thin book + manufactured volume is the classic scam/criminal pump tell.
-        lp_liq = 15
+        # Thin book + real (not dead) volume is the classic criminal-pump tell.
+        lp_liq = 18
         flags.append("low_liquidity_trap")
     lp = (lp_vol * w["volume_spike"] + lp_price * w["price_change"]
           + lp_imb * w["imbalance"] + lp_liq * w["liquidity"])
 
-    # --- classic (short-squeeze grind): stacked book grinding up, modest volume
+    # --- classic (short-squeeze grind): stacked bids grinding up WITH participation.
+    #     A DEAD-flat book is no longer a "squeeze" — low volume stopped earning
+    #     points (that was the bug rewarding lifeless books as classic squeezes).
     cl_imb = 0.0
-    if imbalance >= 0.80:
-        cl_imb = 40
-    elif imbalance >= 0.70:
-        cl_imb = 30
-    elif imbalance >= 0.60:
-        cl_imb = 18
-    elif imbalance >= 0.55:
-        cl_imb = 8
+    if 0.65 <= imbalance < 0.85:
+        cl_imb = 34
+    elif 0.55 <= imbalance < 0.65:
+        cl_imb = 20
     cl_price = 0.0
-    if 5 <= price_change_pct < 25:
-        cl_price = 25
-    elif 25 <= price_change_pct < 50:
-        cl_price = 12
+    if 3 <= price_change_pct < 20:
+        cl_price = 22
+    elif 20 <= price_change_pct < 35:
+        cl_price = 10
     cl_vol = 0.0
-    if volume_spike < 3:
-        cl_vol = 15
-    elif volume_spike < 6:
-        cl_vol = 8
+    if 1.5 <= volume_spike < 6:
+        cl_vol = 14            # participation present (NOT a dead book)
+    elif volume_spike >= 6:
+        cl_vol = 6
     cl_liq = 0.0
     if low_liquidity and imbalance >= 0.65:
-        cl_liq = 10
+        cl_liq = 8
     cl = (cl_imb * w["imbalance"] + cl_price * w["price_change"]
           + cl_vol * w["volume_spike"] + cl_liq * w["liquidity"])
+
+    # Dead volume = no real flow → not a pump. Damp BOTH paths hard so a lifeless
+    # book can never rank as a candidate.
+    if dead_volume:
+        lp *= 0.25
+        cl *= 0.25
+        flags.append("dead_volume")
 
     score_long_pump = int(max(0, min(100, round(lp))))
     score_classic = int(max(0, min(100, round(cl))))
@@ -362,17 +384,21 @@ def score_candidate(
     if cluster == "classic" and "squeeze_grind" not in flags:
         flags.append("squeeze_grind")
 
-    # Confidence rises with real liquidity (harder to fake) and a clean,
-    # not-yet-exhausted move. Pure thin-book spikes stay low-confidence.
+    # Confidence rises with real liquidity (harder to fake) + an EARLY (not exhausted)
+    # move backed by volume. Dead-volume or already-run spikes are pushed DOWN.
     confidence = 35.0
     confidence += min(liquidity_usd / 10_000, 35)  # up to +35 for deep book
-    if 10 <= price_change_pct <= 60:
-        confidence += 15  # live move, not already dumped
+    if 1 <= price_change_pct <= 25:
+        confidence += 15  # early, live move
     if volume_spike >= 3:
         confidence += 10
+    if dead_volume or price_change_pct >= 45:
+        confidence -= 25
     confidence_score = int(max(0, min(100, round(confidence))))
 
-    if low_liquidity and volume_spike >= 6 and price_change_pct >= 10:
+    if dead_volume:
+        classification = "dead_book"
+    elif low_liquidity and volume_spike >= 6 and 1 <= price_change_pct < 25:
         classification = "criminal_pump_suspect"
     elif volume_spike >= 6 and price_change_pct >= 25:
         classification = "active_pump"

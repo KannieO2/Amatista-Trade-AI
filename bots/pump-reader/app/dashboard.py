@@ -546,8 +546,8 @@ DASHBOARD_HTML = r"""<!doctype html>
         <div class="phead"><span class="pt">Candidatos · Criminal Pumps</span><span class="px" id="pp-count">FSM · antes del pump</span></div>
         <table class="fitbl">
           <thead><tr>
-            <th style="width:8%" title="Edge: % de subida esperada (MFE) del bucket según outcomes REALES — esto rankea/decide la entrada">Edge</th>
-            <th style="width:7%" title="Momentum: precio ya movido. NO decide la entrada (referencia)">Mom.</th>
+            <th style="width:8%" title="Edge: % de subida esperada (MFE) del bucket según outcomes REALES — lo aprendido">Edge</th>
+            <th style="width:7%" title="Score de calidad-pump AHORA: volumen vivo + ignición temprana + compradores + libro thin. Penaliza muerto/exhausto/muro-falso">Score</th>
             <th style="width:20%">Token</th>
             <th style="width:13%">Cluster</th>
             <th style="width:12%">Estado</th>
