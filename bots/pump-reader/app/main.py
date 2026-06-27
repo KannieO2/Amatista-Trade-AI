@@ -360,6 +360,12 @@ FSM_MIN_BREAKOUT_PCT = float(os.getenv("PUMP_FSM_MIN_BREAKOUT_PCT", "1.5"))
 # sin llegar tarde — las ganadoras corrieron 2.6%+, +0.6% deja runway. Sigue siendo ANTES del
 # grueso del pump. 0 = volver a flat puro. onchain_lead lo waivea. Tunable.
 FSM_IGNITION_MIN_PCT = float(os.getenv("PUMP_FSM_IGNITION_MIN_PCT", "0.6"))
+# BREAKOUT REAL vs FAKE-OUT. _breakout_state devuelve breaking=True sólo si el último
+# close es nuevo máximo de las últimas 3 velas (rompiendo AHORA). Sin esto el FSM entra
+# a tokens que rompieron +0.6% pero YA revierten (último close < máx reciente = fade) =
+# los fake-outs que sangran. Exigir breaking=True deja pasar SÓLO el breakout vivo, no el
+# que se está cayendo. breaking=None (serie corta) no bloquea. onchain_lead lo waivea.
+FSM_REQUIRE_BREAKING = os.getenv("PUMP_FSM_REQUIRE_BREAKING", "true").lower() == "true"
 FSM_REQUIRE_ONCHAIN_WHEN_AVAIL = os.getenv("PUMP_FSM_REQUIRE_ONCHAIN", "true").lower() == "true"
 FSM_ONCHAIN_MIN_HEAT = int(os.getenv("PUMP_FSM_ONCHAIN_MIN_HEAT", "55"))
 # 21h-TIMING fix (data-driven). Forensics on 212 real trades: pre_pump_accumulation
@@ -2680,6 +2686,13 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
                              f"plano sin lean alcista (+{runup:.1f}% < +{FSM_IGNITION_MIN_PCT:.1f}%) — "
                              f"resuelve 50/50, espera el primer tick arriba")
             return False
+    # BREAKOUT VIVO: el token rompió pero ¿sigue subiendo o ya revierte? breaking=False =
+    # último close por debajo del máximo de 3 velas = fake-out desinflándose (los que sangran).
+    # Sólo entra al breakout que hace nuevo máximo AHORA. onchain_lead lo waivea.
+    if fsm_path and not skip_gates and not onchain_lead and FSM_REQUIRE_BREAKING and breaking is False:
+        _record_learning(candidate.symbol, "skip_fading", "paper", candidate,
+                         "rompió pero revierte (último close < máx 3 velas) — fake-out, no breakout vivo")
+        return False
     if not fsm_path and not skip_gates:
         # (b) anti-FLAT: require a CONFIRMED up-break so the momentum path doesn't buy
         # a flat base that breaks 50/50 (the MFE=+0.0% churn). Entry only in the band
