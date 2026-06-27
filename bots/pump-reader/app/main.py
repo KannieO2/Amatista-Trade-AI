@@ -2901,6 +2901,18 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
             _record_learning(candidate.symbol, "skip_dump_in_progress", "paper", candidate,
                              f"on-chain dumpeando: buy_ratio {_br:.2f} < {ANTIRUG_MIN_BUY_RATIO} ({_flow} txns/1h)")
             return False
+    # ON-CHAIN CONFIRMATION (lead, FSM_REQUIRE_ONCHAIN). El forense midió que las entradas
+    # FSM puras dan mfe~0 (sin edge): el order-book CEX no ve la coordinación, que pasa FUERA
+    # del exchange. Cuando SÍ hay cobertura DEX, exige presión compradora REAL on-chain (heat
+    # >= umbral): si el DEX está visible y NO acumula, el "pump" no existe en la fuente → no
+    # entres. Sin DEX (_arg_dex None) no bloquea (no se puede confirmar). onchain_lead YA es
+    # la confirmación (se waivea). Esta es la señal "de afuera" gratis que sí funciona.
+    if (fsm_path and not skip_gates and not onchain_lead and FSM_REQUIRE_ONCHAIN_WHEN_AVAIL
+            and _arg_dex is not None and _heat < FSM_ONCHAIN_MIN_HEAT):
+        _record_learning(candidate.symbol, "skip_no_onchain_confirm", "paper", candidate,
+                         f"DEX visible, heat {_heat} < {FSM_ONCHAIN_MIN_HEAT} — sin acumulación on-chain "
+                         f"real (la causa del pump está afuera y no aparece)")
+        return False
     # HOLDER CONCENTRATION veto (rug-prone): un solo whale (>25%) o el top-10 (>70%) puede
     # dumpear todo encima. Dato on-chain ya calculado (holder_concentration); solo cuando
     # hay cobertura DEX (security se setea sólo si dex != None). Marca peligroso.
