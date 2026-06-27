@@ -319,6 +319,18 @@ ENTRY_MAX_RUNUP_PCT = float(os.getenv("PUMP_ENTRY_MAX_RUNUP_PCT", "12"))
 #              confirmed exceeded it, 17% of no-pumps did → ceiling cuts them, 0 lost.
 ENTRY_MAX_LIQUIDITY_USD = float(os.getenv("PUMP_ENTRY_MAX_LIQUIDITY_USD", "150000"))
 ENTRY_MAX_IMBALANCE = float(os.getenv("PUMP_ENTRY_MAX_IMBALANCE", "0.85"))
+# Buy-pressure FLOOR (breakout real). imbalance = fracción de bids (0.5 balanceado, >0.5
+# comprador, <0.5 vendedor). Un breakout con libro ask-heavy = venta hacia la fuerza =
+# fake-out. Exige al menos libro balanceado en el FSM. 0 lo apaga; sin dato (<=0) no bloquea.
+ENTRY_MIN_IMBALANCE = float(os.getenv("PUMP_ENTRY_MIN_IMBALANCE", "0.5"))
+# Convicción por setup → multiplicador de tamaño. Los listings (catalizador público líder)
+# son la entrada de MÁS alta convicción. El FSM normal queda en 1.0 (la edge-sizing ya
+# recorta por confianza medida). Acotado por balance. Tunable.
+SETUP_CONVICTION = {
+    "coinbase_listing": float(os.getenv("PUMP_CONV_LISTING", "1.5")),
+    "binance_listing": float(os.getenv("PUMP_CONV_LISTING", "1.5")),
+    "upbit_listing": float(os.getenv("PUMP_CONV_UPBIT", "1.4")),
+}
 # Anti-rug (on-chain): cuando HAY cobertura DEX y el flujo está DUMPEANDO (ventas
 # dominan las compras con suficiente actividad), es un rug/dump en progreso → veta
 # y marca peligroso. No compres la salida del dev. Solo aplica si hay datos DEX
@@ -559,6 +571,8 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_pipeline_loop()),
         asyncio.create_task(_onchain_loop()),
         asyncio.create_task(_coinbase_loop()),
+        asyncio.create_task(_binance_loop()),
+        asyncio.create_task(_upbit_loop()),
         asyncio.create_task(_optimization_loop()),
         asyncio.create_task(_grid_summary_loop()),
         asyncio.create_task(_websocket_loop()),
@@ -1498,49 +1512,63 @@ COINBASE_POLL_SECONDS = int(os.getenv("PUMP_COINBASE_POLL_SECONDS", "120"))
 COINBASE_LISTING_ENTER = os.getenv("PUMP_COINBASE_LISTING_ENTER", "true").lower() == "true"
 
 
-async def _handle_coinbase_listing(ev: dict) -> None:
-    """A Coinbase listing/relisting fired = high-conviction pump catalyst. ALERT
+_LISTING_VENUES = {
+    "coinbase": ("🟦 COINBASE", "Coinbase"),
+    "binance":  ("🟨 BINANCE", "Binance"),
+    "upbit":    ("🇰🇷 UPBIT", "Upbit (premium coreano)"),
+}
+
+
+async def _handle_listing(ev: dict, venue: str) -> None:
+    """A listing/relisting on a major venue = high-conviction pump catalyst. ALERT
     always; RECORD it to the learning lab so MFE/MAE proves whether the edge is real
-    in OUR universe BEFORE we risk paper capital on it. Auto-entry stays OFF by
-    default (PUMP_COINBASE_LISTING_ENTER) — measure the edge first, then enable."""
+    in OUR universe; optional paper entry gated by the master listing switch
+    (PUMP_COINBASE_LISTING_ENTER). skip_gates bypasses SIGNAL gates only — capital
+    protection (kill-switch + daily-loss + drawdown + max-open) still applies. The
+    setup_hint f'{venue}_listing' drives the conviction sizing (listings size up)."""
+    emoji, vname = _LISTING_VENUES.get(venue, ("📈 LISTING", venue.title()))
     base = ev["base"]
     cand = None
     for ex in SUPPORTED_EXCHANGES:
         cand = _find_candidate(ex, f"{base}/USDT")
         if cand is not None:
             break
-    label = "nuevo listing" if ev["kind"] == "new_listing" else "en vivo (listing day)"
+    label = "nuevo listing" if ev.get("kind") == "new_listing" else "en vivo (listing day)"
     try:
         await notify.send_alert(format_alert(
-            f"{base}/USDT", f"🟦 COINBASE · {label}",
+            f"{base}/USDT", f"{emoji} · {label}",
             exchange=(cand.exchange if cand else "—"),
             liquidity_usd=(cand.liquidity_usd if cand else 0.0),
-            reasons=["catalizador de pump (listing Coinbase)", "señal líder pública (gratis)",
+            reasons=[f"catalizador de pump (listing {vname})", "señal líder pública (gratis)",
                      ("cotiza en " + cand.exchange) if cand else "aún no en tus CEX"],
             odds="catalizador confirmado", importance="ALTA",
         ))
     except Exception:
-        logger.exception("coinbase alert failed")
+        logger.exception("%s alert failed", venue)
     await store.insert_bot_log("PUMP_SCANNER", "INFO",
-                               f"Coinbase {ev['kind']}: {base} (catalizador de pump)")
-    # Track the outcome (does it actually pump in our universe?) without trading yet.
+                               f"{vname} {ev.get('kind')}: {base} (catalizador de pump)")
+    # Track the outcome (does it actually pump in our universe?).
     if cand is not None:
         try:
             _lab.record_alert(
                 symbol=cand.symbol, exchange=cand.exchange, alert_price=cand.last_price,
-                pump_score=90, cluster="long_pump", classification="coinbase_listing",
-                signals={"source": "coinbase", "kind": ev["kind"],
+                pump_score=90, cluster="long_pump", classification=f"{venue}_listing",
+                signals={"source": venue, "kind": ev.get("kind"),
                          "liquidity_usd": cand.liquidity_usd, "volume_spike": cand.volume_spike},
             )
         except Exception:
-            logger.exception("coinbase record_alert failed")
-        # Optional paper entry (off by default until the edge is proven).
+            logger.exception("%s record_alert failed", venue)
+        # Optional paper entry (master switch). Conviction sizing via setup_hint.
         if COINBASE_LISTING_ENTER and current_mode() == ExecMode.paper:
             cand.cluster = "long_pump"
             for bot in all_bots():
                 if bot.auto_entry and not bot.pm.has(cand.exchange, cand.symbol):
                     await _auto_enter(bot, cand, book="gainers", skip_gates=True,
-                                      setup_hint="coinbase_listing")
+                                      setup_hint=f"{venue}_listing")
+
+
+async def _handle_coinbase_listing(ev: dict) -> None:
+    await _handle_listing(ev, "coinbase")
 
 
 async def _coinbase_loop() -> None:
@@ -1560,6 +1588,50 @@ async def _coinbase_loop() -> None:
         except Exception:
             logger.exception("coinbase loop failed")
         await asyncio.sleep(COINBASE_POLL_SECONDS)
+
+
+BINANCE_POLL_SECONDS = int(os.getenv("PUMP_BINANCE_POLL_SECONDS", "300"))
+UPBIT_POLL_SECONDS = int(os.getenv("PUMP_UPBIT_POLL_SECONDS", "180"))
+
+
+async def _binance_loop() -> None:
+    """Poll Binance's public exchangeInfo; a NEW base on a USDT pair = a fresh Binance
+    listing (the 'Binance effect'). Best-effort; first poll only seeds state."""
+    from . import exchange_listings as xl
+    from . import coinbase_listings as cb
+    while True:
+        try:
+            curr = await xl.fetch_binance()
+            if curr:
+                raw = await store.get_state("binance_symbols")
+                prev = json.loads(raw) if raw else {}
+                if prev:
+                    for ev in cb.detect_events(prev, curr):
+                        await _handle_listing(ev, "binance")
+                await store.set_state("binance_symbols", json.dumps(curr))
+        except Exception:
+            logger.exception("binance loop failed")
+        await asyncio.sleep(BINANCE_POLL_SECONDS)
+
+
+async def _upbit_loop() -> None:
+    """Poll Upbit's public market list; a NEW KRW market = a fresh Upbit listing (the
+    'Korean premium' effect). Best-effort; first poll only seeds state."""
+    from . import exchange_listings as xl
+    from . import coinbase_listings as cb
+    while True:
+        try:
+            curr = await xl.fetch_upbit()
+            if curr:
+                raw = await store.get_state("upbit_markets")
+                prev = json.loads(raw) if raw else {}
+                if prev:
+                    for ev in cb.detect_events(prev, curr):
+                        await _handle_listing(ev, "upbit")
+                await store.set_state("upbit_markets", json.dumps(curr))
+        except Exception:
+            logger.exception("upbit loop failed")
+        await asyncio.sleep(UPBIT_POLL_SECONDS)
 
 
 async def _persist_position(bot: UserBot, pos) -> None:
@@ -2854,6 +2926,14 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
         _record_learning(candidate.symbol, "skip_fake_wall", "paper", candidate,
                          f"imbalance {candidate.orderbook_imbalance:.2f} > {ENTRY_MAX_IMBALANCE:.2f} (muro de bids falso)")
         return False
+    # (2b) Buy-pressure FLOOR — un breakout sin bids detrás = venta hacia la fuerza =
+    # fake-out. Solo FSM (el listing/gainers tienen skip_gates). Sin dato (<=0) no bloquea.
+    if (fsm_path and not skip_gates and not onchain_lead and ENTRY_MIN_IMBALANCE > 0
+            and 0.0 < candidate.orderbook_imbalance < ENTRY_MIN_IMBALANCE):
+        _record_learning(candidate.symbol, "skip_no_buyers", "paper", candidate,
+                         f"imbalance {candidate.orderbook_imbalance:.2f} < {ENTRY_MIN_IMBALANCE:.2f} "
+                         f"(libro ask-heavy, sin compradores detrás del breakout)")
+        return False
     # (3) MARKET-CAP ceiling — el techo de liquidez mide el LIBRO, no el tamaño real.
     # APE/AERO/STEEM tienen libro flaco en el venue pero son mid/big-caps ($100M+)
     # que NO pumpean. El market cap (CMC/CoinGecko) es el filtro microcap correcto.
@@ -2905,11 +2985,12 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
     _eng = get_analytics()
     confidence = _eng.confidence_for(setup_type, candidate.exchange)
     size_mult = _eng.sizing_multiplier(confidence) if EDGE_SIZING_ENABLED else 1.0
+    conv = SETUP_CONVICTION.get(setup_type, 1.0)   # convicción por setup (listings ↑)
     risk_pct = float(os.getenv("PUMP_RISK_PER_TRADE_PCT", "1.0"))
     stop_pct = float(os.getenv("PUMP_DYNAMIC_STOP_PCT", "5.0"))
     balance = bot.balance()
     size = (balance * risk_pct / 100) / (stop_pct / 100) if (stop_pct > 0 and balance > 0) else bot.auto_entry_usd
-    size = round(max(10.0, min(size * size_mult, balance or bot.auto_entry_usd)), 2)
+    size = round(max(10.0, min(size * size_mult * conv, balance or bot.auto_entry_usd)), 2)
 
     # Circuit-breaker inputs (capital protection): activan los gates daily-loss +
     # drawdown de risk.py que estaban en 0 = muertos. daily_loss = pérdida realizada

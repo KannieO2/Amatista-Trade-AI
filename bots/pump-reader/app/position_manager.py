@@ -295,14 +295,19 @@ class PositionManager:
                     return events
             else:
                 pos.vol_fade_since = None  # volume revived → reset the fade clock
-        # Fast dead-trade cut — GAINERS ONLY. For a momentum entry, flat-after-entry
-        # = the move we chased is dead, cut cheap NOW (attacks the #1 measured bleed:
-        # slow flat timeouts at -1.25%). For PREPUMP this is WRONG: an accumulation
-        # token is flat BY DESIGN and the confirmed-pump lead time is ~21h, so a 3-min
-        # flat cut guarantees exiting BEFORE the move (the no_progress churn). Prepump
-        # falls through to the volume-aware time-stop, which keeps a token with live
-        # volume alive instead of cutting it for merely sitting still.
-        if (pos.book == "gainers" and FAST_CUT_MINUTES > 0 and elapsed_min >= FAST_CUT_MINUTES
+        # Fast dead-trade cut — GAINERS + FAILED-BREAKOUT prepump. For a momentum entry,
+        # flat-after-entry = the move we chased is dead, cut cheap NOW (attacks the #1
+        # measured bleed: slow flat timeouts at -1.25%). For a PREPUMP "ruptura" entry the
+        # SAME applies now: since entry requires a LIVE breakout (breaking=True + ignition),
+        # a ruptura position that never progressed past +FAST_CUT_MIN_PROGRESS_PCT in
+        # FAST_CUT_MINUTES and is red = the breakout FAILED → cut it cheap instead of
+        # bleeding to the hard-stop. The patient treatment stays ONLY for "lead"/on-chain
+        # prepump entries (bought BEFORE the move, flat by design) — those fall through to
+        # the volume-aware time-stop.
+        _failed_breakout = (pos.book == "prepump"
+                            and getattr(pos, "entry_phase", "") == "ruptura")
+        if ((pos.book == "gainers" or _failed_breakout) and FAST_CUT_MINUTES > 0
+                and elapsed_min >= FAST_CUT_MINUTES
                 and peak_gain < FAST_CUT_MIN_PROGRESS_PCT and gain <= 0):
             events.append(self._sell(pos, price, 1.0, "no_progress"))
             return events
