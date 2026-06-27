@@ -546,15 +546,16 @@ DASHBOARD_HTML = r"""<!doctype html>
         <div class="phead"><span class="pt">Candidatos · Criminal Pumps</span><span class="px" id="pp-count">FSM · antes del pump</span></div>
         <table class="fitbl">
           <thead><tr>
-            <th style="width:8%">Score</th>
-            <th style="width:23%">Token</th>
-            <th style="width:15%">Cluster</th>
-            <th style="width:13%">Estado</th>
+            <th style="width:8%" title="Edge: % de subida esperada (MFE) del bucket según outcomes REALES — esto rankea/decide la entrada">Edge</th>
+            <th style="width:7%" title="Momentum: precio ya movido. NO decide la entrada (referencia)">Mom.</th>
+            <th style="width:20%">Token</th>
+            <th style="width:13%">Cluster</th>
+            <th style="width:12%">Estado</th>
             <th style="width:7%">Acc</th><th style="width:7%">Pers</th><th style="width:7%">Rug</th>
-            <th style="width:10%">&Delta;24h</th>
+            <th style="width:9%">&Delta;24h</th>
             <th style="width:10%">Chart</th>
           </tr></thead>
-          <tbody id="pp-body"><tr><td colspan="9" class="empty">Analizando acumulación…</td></tr></tbody>
+          <tbody id="pp-body"><tr><td colspan="10" class="empty">Analizando acumulación…</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -1108,18 +1109,21 @@ async function loadOverview(){
   $("pp-body").innerHTML = pp.length ? pp.map(r=>{
     const hasMk = r.score!=null;
     const scoreCell = hasMk ? mkScore(r.score) : '<span class="px">—</span>';
+    const edgeCell = (r.edge==null) ? '<span class="px">—</span>'
+      : `<span class="scoreb mono" style="color:${r.edge>0.5?'var(--green)':r.edge<0?'var(--red)':'var(--muted)'};background:rgba(160,92,242,.10)" title="${r.edge_n||0} muestras${(r.edge_n||0)<8?' · aún aprendiendo (cold-start)':''}">${r.edge>0?'+':''}${r.edge}%</span>`;
     const cluster = hasMk ? `<span class="tag"><span class="cdot" style="background:${clusterColor(r.cluster)}"></span>${tcase(r.cluster)}</span>` : '<span class="px">—</span>';
     const up = (r.delta_24h||0)>=0;
     const delta = hasMk ? `<span class="mono delta ${up?'up':'down'}">${up?'+':''}${r.delta_24h}%</span>` : '<span class="px">—</span>';
     const chart = (hasMk && r.spark && r.spark.length) ? sparkSvg(r.spark) : '<span class="px">—</span>';
     return `<tr style="cursor:pointer" onclick="openCandidate('${r.symbol}','${r.exchange}')">
+      <td>${edgeCell}</td>
       <td>${scoreCell}</td>
       <td><span class="sym">${r.symbol}</span> <span class="px">${upx(r.exchange)}</span></td>
       <td>${cluster}</td>
       <td>${stateChip(r.state)}</td>`
       +plScoreCell(r.acc,false)+plScoreCell(r.pers,false)+plScoreCell(r.rug,true)
       +`<td>${delta}</td><td>${chart}</td></tr>`;
-  }).join("") : `<tr><td colspan="9" class="empty">Analizando acumulación… alimentando el detector</td></tr>`;
+  }).join("") : `<tr><td colspan="10" class="empty">Analizando acumulación… alimentando el detector</td></tr>`;
   const ppHot=pp.filter(r=>r.state==='entry'||r.state==='confirmation').length;
   $("pp-count").textContent = pp.length ? `${ppHot} en compra/confirmación · ${pp.length} en análisis` : "FSM · antes del pump";
 

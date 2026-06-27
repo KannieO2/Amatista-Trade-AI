@@ -3193,7 +3193,8 @@ async def _perform_scan(min_pump_score: int = 1, full: bool = False) -> ScanResp
         _candidates[f"{candidate.exchange}:{candidate.symbol}"] = candidate
         _candidate_market[f"{candidate.exchange.lower()}:{candidate.symbol.upper()}"] = {
             "score": candidate.pump_score, "cluster": candidate.cluster,
-            "delta_24h": candidate.price_change_pct_24h, "spark": candidate.spark}
+            "delta_24h": candidate.price_change_pct_24h, "spark": candidate.spark,
+            "volume_spike": candidate.volume_spike}
         # Momentum scan-path entry ELIMINADO (criminal-pump only). El scan solo mantiene
         # _candidates (radar interno) y alimenta el FSM. Las alertas + entradas salen
         # EXCLUSIVAMENTE del FSM de acumulación (_emit_signal_alert / velocity_ruptura).
@@ -3430,6 +3431,18 @@ async def overview(request: Request) -> dict:
                 r["cluster"] = mk["cluster"] if mk else None
                 r["delta_24h"] = mk["delta_24h"] if mk else None
                 r["spark"] = mk["spark"] if mk else []
+                # EDGE real (Fase 2): el MFE esperado del bucket = lo que RANKEA/decide la
+                # entrada, no el momentum. cold-start (edge_n < EDGE_MIN_SAMPLES) → e ~0 =
+                # honesto ("aún aprendiendo"). Esto desacopla la mentira del score momentum.
+                try:
+                    _vs = float((mk or {}).get("volume_spike") or 1.0)
+                    _e, _en, _ = _lab.edge_score(cluster=(mk["cluster"] if mk else "long_pump"),
+                                                 vol_spike=_vs)
+                    r["edge"] = round(_e, 1)
+                    r["edge_n"] = _en
+                except Exception:
+                    r["edge"] = None
+                    r["edge_n"] = 0
         except Exception:
             prepump = []
     alerts = [c for c in ranked if c.status == CandidateStatus.waiting_confirmation]
