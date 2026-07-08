@@ -1383,9 +1383,12 @@ export class GridEngine extends EventEmitter {
       throw new Error('Leverage debe estar entre 1x y 50x');
     }
 
-    if (config.investmentUSDT < 50) {
-      throw new Error('Inversión mínima: $50 USDT');
+    if (config.investmentUSDT <= 0) {
+      throw new Error('La inversión debe ser mayor a 0');
     }
+    // Sin piso arbitrario de $50: el único mínimo real es el min_notional por grid
+    // de GRVT (validado abajo). Inversiones chicas pasan si satisfacen min_notional
+    // (ETH ~$20/grid; con leverage un monto menor alcanza).
 
     // H.1: pairs are now dynamic from GRVT API. The instrument spec cache
     // is populated by getInstruments() on first call. If the pair isn't

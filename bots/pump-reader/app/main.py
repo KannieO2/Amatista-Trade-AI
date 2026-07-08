@@ -45,6 +45,8 @@ from .account import real_balances
 from .dashboard import DASHBOARD_HTML
 from .executor import (
     FEE_PCT,
+    MAKER_FEE_PCT,
+    MAKER_SLIP_PCT,
     SLIPPAGE_PCT,
     ExecMode,
     ExecutionEngine,
@@ -1273,12 +1275,22 @@ async def _emit_signal_alert(cand: TokenCandidate, scores, tier: str = "ahora",
             logger.exception("signal alert send failed")
     if cfg["track"]:
         try:
+            # Off-exchange edge: persistir el heat que construimos (on-chain + cross-exchange
+            # lead + derivatives) EN el outcome para poder MEDIR después si predice el MFE.
+            # Sin esto, los sensores nuevos existen pero el learning no puede probarlos/tunearlos.
+            _oc = _onchain_heat.get(f"{cand.exchange}:{cand.symbol}") or {}
+            _lead = _oc.get("lead") or {}
+            _der = _oc.get("deriv") or {}
             _lab.record_alert(
                 symbol=cand.symbol, exchange=cand.exchange, alert_price=cand.last_price,
                 pump_score=acc, cluster=cand.cluster, classification=cfg["cls"],
                 signals={"accumulation": acc, "persistence": pers, "rug_risk": rug,
                          "maturity": maturity, "tier": tier,
-                         "liquidity_usd": cand.liquidity_usd, "volume_spike": cand.volume_spike},
+                         "liquidity_usd": cand.liquidity_usd, "volume_spike": cand.volume_spike,
+                         "onchain_heat": _oc.get("heat", 0),
+                         "lead_pct": _lead.get("divergence_pct"),
+                         "funding": _der.get("funding_rate"),
+                         "oi_change_pct": _der.get("oi_change_pct")},
             )
         except Exception:
             logger.exception("signal alert record failed")
@@ -2523,6 +2535,29 @@ EDGE_MIN_SAMPLES = int(os.getenv("PUMP_EDGE_MIN_SAMPLES", "8"))
 # operación; el EdgeScore-de-alertas afina con el tiempo. El gate FUERTE de rentabilidad
 # vendrá del edge por TRADES reales (expectancy por exchange: bitget gana, binance pierde).
 EDGE_MIN_SCORE = float(os.getenv("PUMP_EDGE_MIN_SCORE", "0.5"))
+# COST-AWARE EDGE GATE — la causa medida del 100% en rojo: el costo de ida y vuelta
+# (2×(slippage+fee) ≈ 1.2% market) se come cada trade cuyo MFE esperado no lo supere. El
+# EDGE_MIN_SCORE=0.5% FIJO estaba DEBAJO del costo → aprobaba perdedores por aritmética.
+# Ahora el umbral = max(EDGE_MIN_SCORE, costo_ida_vuelta × SAFETY): solo opera buckets cuyo
+# movimiento esperado cubre el costo con margen. Sube el bot a MENOS trades pero cada uno
+# con chance real de verde (prioriza capital sobre cantidad). Tunable.
+EDGE_COST_SAFETY = float(os.getenv("PUMP_EDGE_COST_SAFETY", "1.3"))
+# COLD-START sin datos (n < EDGE_MIN_SAMPLES): NO comprar a ciegas — esa fase ERA el
+# sangrado (cada dud entraba "pa juntar datos" y perdía el costo). Solo entra con convicción
+# EXTERNA: lead on-chain, o heat >= este umbral (presión compradora real fuera del order-book,
+# la única señal con lead sobre la coordinación off-exchange). Así los primeros datos vienen
+# de setups con razón real de moverse, no de ruido. 0 = desactiva (vuelve al viejo trade-todo).
+EDGE_COLDSTART_MIN_HEAT = int(os.getenv("PUMP_EDGE_COLDSTART_MIN_HEAT", "45"))
+# REALIZED-EXPECTANCY GATE — el gate que faltaba. La data live probó la desconexión: el
+# EdgeScore (MFE de ALERTA) dice +3% pero el PF REALIZADO es 0.045 (los trades salen en
+# minutos, el MFE es a horas → nunca se captura). `confidence_for` ya mide la expectancy
+# realizada pero SOLO escalaba el tamaño (piso 0.5× → seguía sangrando a media máquina).
+# Ahora un setup×venue que en la práctica PIERDE (expectancy realizada ≤ MIN con muestra
+# suficiente) NO opera. Corta la sangría por PnL real, no por una métrica de alerta que
+# miente. onchain_lead exento (setup nuevo sin historial). Tunable / apagable.
+REALIZED_GATE_ENABLED = os.getenv("PUMP_REALIZED_GATE", "true").lower() == "true"
+REALIZED_MIN_N = int(os.getenv("PUMP_REALIZED_MIN_N", "15"))              # muestra mínima para gatear
+REALIZED_MIN_EXPECTANCY = float(os.getenv("PUMP_REALIZED_MIN_EXPECTANCY", "0"))  # $/trade; ≤esto = corta
 # Precio MÁXIMO para la tesis criminal-pump (¢→$1→$2): el multi-x grande está en tokens
 # de precio bajo; uno ya caro tiene poco espacio. Enfoca el universo PRE-PUMP a precio
 # bajo. 0 = desactivado. Solo PRE-PUMP (gainers es momentum, price-agnostic). Tunable.
@@ -2890,10 +2925,27 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
         if EDGE_GATE_ENABLED:
             _edge, _edge_n, _edge_dbg = _lab.edge_score(
                 cluster=candidate.cluster, vol_spike=(_entry_vol or 0))
-            if _edge_n >= EDGE_MIN_SAMPLES and _edge < EDGE_MIN_SCORE:
+            # Costo de ida+vuelta REAL de ESTA entrada: lead = limit/maker (barato, descansas
+            # un bid en quieto), el resto = market taker. Salida SIEMPRE market taker. El MFE
+            # esperado debe SUPERAR el costo × margen — o el trade es rojo por aritmética (la
+            # causa medida del 100% en pérdida: MFE ~0.1% << costo ~1.2%).
+            _entry_cost = (MAKER_SLIP_PCT + MAKER_FEE_PCT) if onchain_lead else (SLIPPAGE_PCT + FEE_PCT)
+            _rt_cost = _entry_cost + (SLIPPAGE_PCT + FEE_PCT)
+            _hurdle = max(EDGE_MIN_SCORE, _rt_cost * EDGE_COST_SAFETY)
+            if _edge_n >= EDGE_MIN_SAMPLES and _edge < _hurdle:
                 _record_learning(candidate.symbol, "skip_low_edge", "paper", candidate,
-                                 f"EdgeScore {_edge:.1f}% < {EDGE_MIN_SCORE:.1f}% esperado "
+                                 f"EdgeScore {_edge:.1f}% < {_hurdle:.1f}% (costo ida+vuelta "
+                                 f"{_rt_cost:.1f}% × {EDGE_COST_SAFETY:g}) — no cubre fees+slippage "
                                  f"(bucket {_edge_dbg['bucket']}, n={_edge_n})")
+                return False
+            # COLD-START: sin datos aún (n < min), NO comprar a ciegas — esa fase ERA el
+            # sangrado. Solo entra con convicción EXTERNA (lead on-chain, o heat alto), la
+            # única señal con lead sobre la coordinación off-exchange. Sin eso: abstención.
+            if (_edge_n < EDGE_MIN_SAMPLES and EDGE_COLDSTART_MIN_HEAT > 0
+                    and not onchain_lead and _heat < EDGE_COLDSTART_MIN_HEAT):
+                _record_learning(candidate.symbol, "skip_coldstart_blind", "paper", candidate,
+                                 f"cold-start (n={_edge_n}<{EDGE_MIN_SAMPLES}) sin convicción externa "
+                                 f"(heat {_heat}<{EDGE_COLDSTART_MIN_HEAT}, sin lead) — no comprar duds a ciegas")
                 return False
     # Differentiated learning (§4): a token already flagged dangerous (a prior scam/rug
     # tell) stays ACTIVELY avoided — redeemable only by strong on-chain buy pressure.
@@ -3008,6 +3060,20 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
     # equal everywhere. confidence_for is exchange-aware. Floor $10, never exceed balance.
     setup_type = setup_hint or ("accumulation" if fsm_path else ("velocity" if accel else "momentum"))
     _eng = get_analytics()
+    # REALIZED-EXPECTANCY GATE — corta el setup×venue que en la PRÁCTICA pierde plata (PnL
+    # real banked), no lo que promete el MFE de alerta. Es EL gate que la data live pedía:
+    # accumulation PF 0.045 → expectancy realizada muy negativa → deja de operar. onchain_lead
+    # exento (entrada nueva sin historial propio). Sin muestra suficiente → deja operar (junta
+    # datos). Complementa el cost-aware/cold-start de arriba: ese cubre buckets nuevos/delgados,
+    # este mata los perdedores ya PROBADOS.
+    if REALIZED_GATE_ENABLED and not onchain_lead:
+        _re = _eng.realized_edge(setup_type, candidate.exchange)
+        if _re["n"] >= REALIZED_MIN_N and (_re["expectancy"] or 0) <= REALIZED_MIN_EXPECTANCY:
+            _record_learning(candidate.symbol, "skip_negative_expectancy", "paper", candidate,
+                             f"{setup_type}@{candidate.exchange}: expectancy realizada "
+                             f"${(_re['expectancy'] or 0):.2f}/trade ≤ ${REALIZED_MIN_EXPECTANCY:.2f} "
+                             f"(PF {_re['pf']}, WR {_re['win_rate']}, n={_re['n']}) — pierde en la práctica")
+            return False
     confidence = _eng.confidence_for(setup_type, candidate.exchange)
     size_mult = _eng.sizing_multiplier(confidence) if EDGE_SIZING_ENABLED else 1.0
     conv = SETUP_CONVICTION.get(setup_type, 1.0)   # convicción por setup (listings ↑)
@@ -3046,6 +3112,9 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
         # supera el 2% → entrada partida en 3 para no mover el precio (microcaps).
         book_depth_usd=candidate.liquidity_usd,
         daily_loss_usd=_daily_loss, current_drawdown_pct=_dd_pct,
+        # Lead on-chain = ACUMULACIÓN en quieto → entrada limit/maker (costo bajo). El resto
+        # (ruptura/gainers) persigue → market taker. Baja el costo donde la tesis lo permite.
+        entry_maker=onchain_lead,
     )
     sw.mark("order")  # order submission (paper fill) done
     # Entry latency: Detection (signal age) -> Validation (gates) -> Order submission.

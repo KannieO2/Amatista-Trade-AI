@@ -57,6 +57,13 @@ SLIPPAGE_PCT = float(os.getenv("PUMP_PAPER_SLIPPAGE_PCT", "0.5"))
 # thin mueve el precio en contra. Sin esto las "ganancias" en microcaps eran fantasía.
 FEE_PCT = float(os.getenv("PUMP_PAPER_FEE_PCT", "0.1"))            # taker, por lado
 IMPACT_COEF = float(os.getenv("PUMP_PAPER_IMPACT_COEF", "1.0"))    # impacto = coef·notional/profundidad
+# LIMIT/maker entry cost — SOLO la tesis de ACUMULACIÓN (lead on-chain): no persigues,
+# descansas un bid en el libro quieto → llenas cerca del mid con fee maker (mucho menor que
+# el taker market). Baja el round-trip ~1.2%→~0.67% donde la tesis es comprar barato en
+# quieto — que es donde el edge medido (~0.7-1%) SÍ puede superar el costo y dar VERDE. La
+# SALIDA siempre es market taker (vendes el pump rápido, la maneja position_manager).
+MAKER_SLIP_PCT = float(os.getenv("PUMP_PAPER_MAKER_SLIP_PCT", "0.05"))   # limit descansando ~ mid
+MAKER_FEE_PCT = float(os.getenv("PUMP_PAPER_MAKER_FEE_PCT", "0.02"))     # maker fee, por lado
 
 
 def market_impact_pct(notional_usd: float, book_depth_usd: float | None) -> float:
@@ -124,15 +131,22 @@ class ExecutionResult:
 class PaperBroker:
     """Simulated fills off a provided reference price. No network, no money."""
 
-    def place(self, leg: OrderLeg, slices: int = 1, book_depth_usd: float | None = None) -> Fill:
+    def place(self, leg: OrderLeg, slices: int = 1, book_depth_usd: float | None = None,
+              maker: bool = False) -> Fill:
+        # Maker/limit entry (solo BUY de acumulación lead): llena cerca del mid con fee maker
+        # → costo de entrada mucho menor que un market taker. La salida no pasa por aquí
+        # (la maneja position_manager con costo taker), así que maker solo abarata la entrada.
+        _use_maker = maker and leg.side == Side.buy
+        _slip = MAKER_SLIP_PCT if _use_maker else SLIPPAGE_PCT
+        _fee = MAKER_FEE_PCT if _use_maker else FEE_PCT
         # Iceberg: partir reduce el slippage promedio ~/ sqrt(slices) (regla de
         # microestructura: cada slice come menos profundidad). slices=1 → directo.
-        base_slip = SLIPPAGE_PCT / (slices ** 0.5) if slices > 1 else SLIPPAGE_PCT
+        base_slip = _slip / (slices ** 0.5) if slices > 1 else _slip
         # + IMPACTO de mercado (tamaño vs profundidad del libro) → realista en microcaps.
         eff_slip = base_slip + market_impact_pct(leg.notional_usd, book_depth_usd)
         slip = 1 + eff_slip / 100 if leg.side == Side.buy else 1 - eff_slip / 100
-        # + taker fee: el buy paga, sube el costo por moneda (recibes menos cantidad).
-        fee = 1 + FEE_PCT / 100 if leg.side == Side.buy else 1 - FEE_PCT / 100
+        # + fee (maker si limit-entry, taker si market): el buy paga, recibe menos cantidad.
+        fee = 1 + _fee / 100 if leg.side == Side.buy else 1 - _fee / 100
         fill_price = leg.entry_price * slip * fee
         amount = leg.notional_usd / fill_price if fill_price > 0 else 0.0
         return Fill(
@@ -275,6 +289,7 @@ class ExecutionEngine:
         book_depth_usd: float | None = None,
         daily_loss_usd: float = 0.0,
         current_drawdown_pct: float = 0.0,
+        entry_maker: bool = False,
     ) -> ExecutionResult:
         mode = current_mode()
         # Default: trade on the venue(s) where the token actually lists.
@@ -320,7 +335,8 @@ class ExecutionEngine:
             slices = _iceberg_slices(per_leg, book_depth_usd)
             try:
                 fill = (await self.live.place(leg, slices) if mode == ExecMode.live
-                        else self.paper.place(leg, slices, book_depth_usd=book_depth_usd))
+                        else self.paper.place(leg, slices, book_depth_usd=book_depth_usd,
+                                              maker=entry_maker))
             except Exception as exc:  # noqa: BLE001 - surface broker errors as rejections, never crash
                 result.rejected.append(f"{exchange}: {exc}")
                 continue

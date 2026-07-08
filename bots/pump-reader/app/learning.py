@@ -328,11 +328,17 @@ class LearningLab:
             if len(rows) < MIN_SAMPLES_COMPONENTS:
                 out[cluster] = {"ready": False, "have": len(rows), "need": MIN_SAMPLES_COMPONENTS}
                 continue
-            keys = ["volume_spike", "price_change_pct_24h", "orderbook_imbalance", "liquidity_usd"]
+            keys = ["volume_spike", "price_change_pct_24h", "orderbook_imbalance", "liquidity_usd",
+                    # Señales off-exchange: medir si el heat construido predice el pump.
+                    "onchain_heat", "lead_pct", "funding", "oi_change_pct"]
             contrib = []
             for k in keys:
-                conf = [o.signals.get(k, 0) for o in rows if o.label == "confirmed_pump"]
-                noo = [o.signals.get(k, 0) for o in rows if o.label != "confirmed_pump"]
+                # None-safe: un token sin perp/dex deja la señal en None → se excluye (no
+                # se cuenta como 0, que sesgaría la media). Solo filas con el dato real.
+                conf = [v for o in rows if o.label == "confirmed_pump"
+                        and (v := o.signals.get(k)) is not None]
+                noo = [v for o in rows if o.label != "confirmed_pump"
+                       and (v := o.signals.get(k)) is not None]
                 if conf and noo:
                     mc, mn = mean(conf), mean(noo)
                     # Lift NORMALIZADO (dimensionless [-1,1]): separación relativa

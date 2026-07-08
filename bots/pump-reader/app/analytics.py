@@ -318,6 +318,23 @@ class AnalyticsEngine:
             return 1.0
         return 0.5
 
+    def realized_edge(self, setup_type: str, exchange: str) -> dict:
+        """Realized per-trade edge for a setup×venue bucket (fallback setup-only), from
+        CLOSED trades only. THE gate-truth: a setup that actually LOSES money (banked PnL)
+        stops trading — unlike edge_score, which measures ALERT MFE (best move of the token,
+        not what the trade captured) and can read +3% while the real trades bleed (PF 0.045).
+        Clean-data only. Neutral (n below floor) → caller lets it trade to gather data."""
+        trusted = self._trusted_trades()
+        sub_ex = [t for t in trusted if t.setup_type == setup_type and t.exchange == exchange]
+        if len(sub_ex) >= MIN_SAMPLE:
+            subset, bucket = sub_ex, "setup+venue"
+        else:
+            subset, bucket = [t for t in trusted if t.setup_type == setup_type], "setup"
+        ex = expectancy_of(subset)
+        pf = profit_factor_of(subset)["profit_factor"]
+        return {"n": len(subset), "expectancy": ex["expectancy"],
+                "win_rate": ex["win_rate"], "pf": pf, "bucket": bucket}
+
     def note_open(self, key: str, ctx: dict) -> None:
         """Record entry-time context for a position so the closed trade can be
         fully reconstructed. ctx holds setup_type/entry_price/size/confidence/etc."""
