@@ -72,6 +72,8 @@ interface WizardState {
   activeWindowSize: string;
   // H.5: '' = use default credentials. Otherwise = sub-account row id (as string for <select>).
   subAccountId: string;
+  // Per-bot paper/live. true = paper (simula, sin dinero real), false = live (real).
+  paperMode: boolean;
 }
 
 const INITIAL_STATE: WizardState = {
@@ -94,6 +96,7 @@ const INITIAL_STATE: WizardState = {
   virtualEnabled: false,
   activeWindowSize: '70',
   subAccountId: '',
+  paperMode: true,   // default paper (seguro): el usuario lo pasa a live a propósito
 };
 
 // H.1: hardcoded fallback — used while the API query is loading
@@ -236,6 +239,8 @@ export function CreateBotWizard({ open, onClose, preset }: CreateBotWizardProps)
       ...autoShiftPayload,
       ...virtualPayload,
       ...subAccountPayload,
+      // Per-bot paper/live. Default paper; live SOLO si el usuario lo activó.
+      paper_mode: state.paperMode,
     } as any);
   }
 
@@ -676,6 +681,43 @@ function StepConfig({
           </div>
         )}
       </div>
+
+      {/* Modo paper/live POR BOT. Default paper (simula, sin dinero real). El usuario
+          activa "dinero real" a propósito. Cada cuenta administra sus propios bots. */}
+      <div
+        className={`mt-4 rounded-md border p-4 ${
+          state.paperMode
+            ? 'border-border-subtle bg-bg-muted/40'
+            : 'border-danger/60 bg-danger/10'
+        }`}
+      >
+        <label className="flex items-start gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            className="mt-0.5 size-4 accent-danger"
+            checked={!state.paperMode}
+            onChange={(e) => update('paperMode', !e.target.checked)}
+          />
+          <div className="flex-1">
+            <div className="text-sm font-semibold text-text-primary">
+              Operar con dinero REAL
+            </div>
+            <div className="text-xs text-text-muted mt-0.5">
+              {state.paperMode
+                ? 'Ahora en PAPER (simulación): coloca órdenes de prueba, no toca GRVT, sin dinero real. Actívalo para operar de verdad.'
+                : '⚠️ LIVE: este bot colocará órdenes REALES en GRVT con tu dinero. Requiere tus API keys conectadas.'}
+            </div>
+          </div>
+          <span
+            className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+              state.paperMode ? 'bg-bg-elevated text-text-muted' : 'bg-danger/20 text-danger'
+            }`}
+          >
+            {state.paperMode ? 'Paper' : 'Live'}
+          </span>
+        </label>
+      </div>
+
       <div className="mt-4">
         <Input
           label={t('wizard.reinvestPct')}

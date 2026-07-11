@@ -23,7 +23,7 @@ import { signToken, verifyToken } from '../auth/jwt.js';
 import { encryptCredentialFields } from '../auth/crypto.js';
 import { sendPasswordResetEmail, isMailerConfigured } from '../mail/mailer.js';
 import { GRVTClient, type GrvtClientCreds } from '../api/client.js';
-import { invalidateGrvtClient } from '../api/grvt-client-factory.js';
+import { invalidateGrvtClient, getGrvtClientForBot } from '../api/grvt-client-factory.js';
 
 // Augment Express Request to carry the authenticated user id set
 // by the JWT middleware. Every protected handler reads req.userId.
@@ -70,6 +70,8 @@ interface EngineOps {
     activeWindowSize?: number;
     // H.5: optional sub-account routing. NULL = use default creds.
     grvtSubAccountId?: number | null;
+    // Per-bot paper/live. true/undefined = paper (seguro), false = live (real).
+    paperMode?: boolean;
   }): Promise<number>;
   startBot(botId: number): Promise<void>;
   pauseBot(botId: number): Promise<void>;
@@ -1106,7 +1108,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
              last_compound_at, total_reinvested, original_investment_usdt,
              quantity_per_level,
              safeguard_enabled, safeguard_threshold_pct, safeguard_action,
-             grvt_sub_account_id
+             grvt_sub_account_id, paper_mode
       FROM grid_bots
       WHERE COALESCE(user_id, 1) = ?
       ORDER BY created_at DESC
@@ -1135,9 +1137,9 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid bot id' });
     await requireBotOwnership(db, id, req.userId!);
 
-    const bot = await dbGet<{ pair: string; status: string }>(
+    const bot = await dbGet<{ pair: string; status: string; grvt_sub_account_id: number | null }>(
       db,
-      `SELECT pair, status FROM grid_bots WHERE id = ?`,
+      `SELECT pair, status, grvt_sub_account_id FROM grid_bots WHERE id = ?`,
       [id]
     );
     if (!bot) return res.status(404).json({ error: 'bot not found' });
@@ -1152,12 +1154,30 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       ORDER BY level_index
     `, [id]);
 
-    // Live data from GRVT (cached 2s).
-    const [ticker, position, openOrders] = await Promise.all([
-      cache.getOrFetch(`ticker:${bot.pair}`, 2_000, () => grvtClient.getTicker(bot.pair)),
-      cache.getOrFetch(`position:${bot.pair}`, 2_000, () => grvtClient.getPosition(bot.pair)),
-      cache.getOrFetch(`openOrders:${bot.pair}`, 2_000, () => grvtClient.getOpenOrders(bot.pair))
-    ]);
+    // Live GRVT data via the bot OWNER's real client (per-user creds), NOT
+    // the legacy singleton — that one runs on the mock env creds and throws
+    // "Falló re-autenticación", which used to 500 the whole endpoint and
+    // blank the chart (0 niveles). A GRVT hiccup must never hide the DB
+    // levels: fetch live data best-effort and always return `levels`.
+    let ticker: unknown = null;
+    let position: unknown = null;
+    let openOrders: unknown[] = [];
+    let liveError: string | null = null;
+    try {
+      const client = await getGrvtClientForBot(
+        req.userId!,
+        bot.grvt_sub_account_id ?? null,
+        gridBotDb
+      );
+      [ticker, position, openOrders] = await Promise.all([
+        cache.getOrFetch(`ticker:${req.userId}:${bot.pair}`, 2_000, () => client.getTicker(bot.pair)),
+        cache.getOrFetch(`position:${req.userId}:${bot.pair}`, 2_000, () => client.getPosition(bot.pair)),
+        cache.getOrFetch(`openOrders:${req.userId}:${bot.pair}`, 2_000, () => client.getOpenOrders(bot.pair)),
+      ]);
+    } catch (err) {
+      liveError = (err as Error).message;
+      log.warn({ botId: id, err: liveError }, 'grid-state live fetch failed; returning DB levels only');
+    }
 
     res.json({
       botId: id,
@@ -1167,6 +1187,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       ticker,
       position,
       openOrders,
+      liveError,
       ts: Date.now()
     });
     return;
@@ -1877,6 +1898,8 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       active_window_size: number;
       // H.5: optional sub-account routing. Null/missing = default creds.
       grvt_sub_account_id: number | null;
+      // Per-bot paper/live. true/missing = paper (seguro), false = live (real).
+      paper_mode: boolean;
     }>;
 
     const errors: string[] = [];
@@ -1991,8 +2014,10 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         virtualEnabled,
         activeWindowSize: virtualEnabled ? activeWindowSize : undefined,
         grvtSubAccountId,
+        // paper por defecto (seguro): live SOLO si el cliente manda paper_mode:false.
+        paperMode: body.paper_mode !== false,
       });
-      log.info({ botId, userId, pair, direction, leverage, grids }, 'bot created (paused)');
+      log.info({ botId, userId, pair, direction, leverage, grids, paperMode: body.paper_mode !== false }, 'bot created (paused)');
 
       // Persist per-bot risk acceptance if the dashboard sent the
       // exact text + version it showed. The text is hashed and the

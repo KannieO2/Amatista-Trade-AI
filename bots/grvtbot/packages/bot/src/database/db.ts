@@ -77,6 +77,8 @@ export interface GridBot {
   // default credentials in grvt_credentials. Non-null routes the
   // engine through that specific sub-account's encrypted creds.
   grvt_sub_account_id?: number | null;
+  // Per-bot paper/live: 1 = paper (dry-run, sin dinero real), 0 = live (real).
+  paper_mode?: number;
 }
 
 export interface GridLevel {
@@ -382,6 +384,10 @@ export class GridBotDB {
       // application-layer guards (delete blocked when bots reference)
       // keep referential integrity.
       'grvt_sub_account_id INTEGER',
+      // Per-bot paper/live mode. 1 = paper (dry-run: simula órdenes, NO toca GRVT,
+      // sin dinero real). 0 = live (coloca órdenes reales). Default 1 = paper por
+      // seguridad → un bot nuevo nunca opera real hasta que la cuenta lo pase a live.
+      'paper_mode INTEGER DEFAULT 1',
     ]) {
       try { await this.dbRun(`ALTER TABLE grid_bots ADD COLUMN ${col}`); } catch (e) { /* exists */ }
     }
@@ -851,6 +857,7 @@ export class GridBotDB {
       params.virtual_enabled ?? 0,
       params.active_window_size ?? null,
       params.grvt_sub_account_id ?? null,
+      params.paper_mode ?? 1,   // default paper (seguro)
     ];
     const sql = `
       INSERT INTO grid_bots (
@@ -859,8 +866,8 @@ export class GridBotDB {
         investment_usdt, original_investment_usdt, quantity_per_level,
         grid_profit_usdt, trend_pnl_usdt, total_pnl_usdt,
         status, position_size, avg_entry_price, liquidation_price, params_json,
-        virtual_enabled, active_window_size, grvt_sub_account_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        virtual_enabled, active_window_size, grvt_sub_account_id, paper_mode
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     await this.dbRun(sql, values);

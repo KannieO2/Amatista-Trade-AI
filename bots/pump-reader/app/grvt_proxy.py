@@ -261,24 +261,33 @@ async def _proxy_http(request: Request, path: str) -> Response:
     client = _get_client()
     body = await request.body()
     headers = {k: v for k, v in request.headers.items() if k.lower() not in _REQ_STRIP}
-    # AUTH-INJECTION: las llamadas REST del SPA embebido (/grid/api/v2/*) necesitan el
-    # JWT GRVT del usuario, pero el browser a veces NO lo adjunta → 401 "unauthorized"
-    # ("No se pudieron cargar los bots"). Si la llamada no trae su propia Authorization,
-    # inyectamos el token del usuario logueado (lo mintea+cachea main._grid_token_for).
-    # Los endpoints de auth (login/signup) se saltan — ELLOS son el login. Esto vive en
-    # nuestro wrapper, NO toca los internals del grvtbot.
-    # Excluir SOLO login/signup (ESOS son el login, no llevan token). El resto de
-    # /auth/* (p.ej. /auth/me = "¿quién soy?") SÍ necesita el token inyectado.
-    if (_token_provider is not None
-            and path.startswith("api/v2/")
-            and path not in ("api/v2/auth/login", "api/v2/auth/signup")
-            and not any(k.lower() == "authorization" for k in headers)):
-        try:
-            _tok = await _token_provider(request)
-            if _tok:
-                headers["authorization"] = f"Bearer {_tok}"
-        except Exception:  # noqa: BLE001 - inyección best-effort, nunca rompe el proxy
-            logger.debug("grid token inject failed", exc_info=True)
+    # AISLAMIENTO FORZADO — el ÚNICO acceso al grid es el SSO por-usuario de TradeOS.
+    # El grid NO tiene login propio: un solo login (Amatista) da acceso a los dos bots,
+    # y cada cuenta ve SOLO lo suyo. Dos reglas en /api/v2/*:
+    #   (1) BLOQUEAR login/signup DEL CLIENTE (403). Antes el SPA podía autenticarse solo
+    #       como otra cuenta (p.ej. un `admin@` compartido) y sus keys/bots caían ahí,
+    #       cruzándose entre usuarios. El SSO server-side mintea su token llamando al
+    #       backend DIRECTO (no por este proxy) → NO se ve afectado por este bloqueo.
+    #   (2) SIEMPRE inyectar el token del usuario TradeOS logueado, PISANDO cualquier
+    #       Authorization que traiga el SPA. Antes solo se inyectaba si faltaba → un token
+    #       viejo del SPA (admin@) se colaba y saltaba el SSO. Ahora toda llamada opera
+    #       como el usuario del cookie (owner@ / <uid>@) → aislamiento garantizado.
+    if path.startswith("api/v2/"):
+        if path in ("api/v2/auth/login", "api/v2/auth/signup"):
+            return JSONResponse(
+                {"error": "login_disabled",
+                 "hint": "El grid usa el login de Amatista (SSO por-usuario). No tiene login propio."},
+                status_code=403,
+            )
+        if _token_provider is not None:
+            # Descartar el token propio del SPA (case-insensitive) y forzar el del usuario.
+            headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
+            try:
+                _tok = await _token_provider(request)
+                if _tok:
+                    headers["authorization"] = f"Bearer {_tok}"
+            except Exception:  # noqa: BLE001 - inyección best-effort, nunca rompe el proxy
+                logger.debug("grid token inject failed", exc_info=True)
     try:
         upstream = await client.request(
             request.method,
@@ -360,6 +369,24 @@ async def _pump_upstream_to_client(ws: WebSocket, up) -> None:
 async def _proxy_ws(ws: WebSocket) -> None:
     await ws.accept()
     query = ws.scope.get("query_string", b"").decode()
+    # AISLAMIENTO + FIX "invalid/expired JWT": el SPA abre el WS con el token que
+    # tenga en localStorage (a veces viejo/expirado) → el grid lo rechaza. Igual que
+    # en REST, PISAMOS el token con el del usuario TradeOS logueado (leído del cookie),
+    # minteado fresco. Así el WS SIEMPRE autentica como el dueño correcto y nunca expira
+    # de más. No toca la lógica del grid — sólo la credencial del handshake.
+    if _token_provider is not None:
+        try:
+            _tok = await _token_provider(ws)
+        except Exception:  # noqa: BLE001 - best-effort, nunca rompe el proxy
+            _tok = None
+            logger.debug("ws grid token inject failed", exc_info=True)
+        if _tok:
+            from urllib.parse import parse_qs, urlencode
+
+            _params = parse_qs(query, keep_blank_values=True)
+            _params["token"] = [_tok]
+            _params.pop("api_key", None)  # forzar auth por token de usuario, no operator
+            query = urlencode(_params, doseq=True)
     target = f"{WS_BACKEND}/ws" + (f"?{query}" if query else "")
     try:
         async with websockets.connect(target, max_size=None, open_timeout=10) as up:

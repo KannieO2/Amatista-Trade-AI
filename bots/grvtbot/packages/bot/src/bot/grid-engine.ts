@@ -31,6 +31,9 @@ export interface GridConfig {
   // H.5: route this bot through a specific sub-account. NULL/undefined
   // = use the user's default credentials in grvt_credentials.
   grvtSubAccountId?: number | null;
+  // Per-bot paper/live. true = paper (dry-run, sin dinero real), false = live
+  // (órdenes reales en GRVT). Default paper (seguro) cuando se omite.
+  paperMode?: boolean;
 }
 
 export interface GridCalculation {
@@ -720,6 +723,8 @@ export class GridEngine extends EventEmitter {
         virtual_enabled: virtualEnabled ? 1 : 0,
         active_window_size: activeWindowSize,
         grvt_sub_account_id: config.grvtSubAccountId ?? null,
+        // paper por defecto (seguro): solo live si el caller lo pide explícito.
+        paper_mode: config.paperMode === false ? 0 : 1,
         params_json: JSON.stringify({
           spacing: calculation.spacing,
           quantityPerGrid: calculation.quantityPerGrid,
@@ -1297,13 +1302,16 @@ export class GridEngine extends EventEmitter {
     const effCap = config.investmentUSDT * config.leverage * ORDER_ALLOC;
     const { min_notional: minNotional, min_size: minSize } = getInstrumentSpec(config.pair);
     
+    // Floor at the instrument's real min_size (NOT a hardcoded 0.03): a
+    // $17 hardcode floor silently over-leveraged small-capital bots on
+    // low-priced pairs (e.g. BNB $8 @ 6x asked for 0.01/level but got
+    // 0.03 = 3x the notional → ~19x real). The min_notional loop below
+    // still guarantees each order clears the exchange minimum.
     let canonicalQty = Math.max(
       Math.ceil((effCap / config.numGrids / midPrice) * 100) / 100,
-      0.03
+      minSize
     );
-    // Ensure min notional at the LOWEST price (worst-case for buy levels):
-    // a 0.03 qty at $1800 = $54 which is well above $20, so this is
-    // usually a no-op, but keep it as defense in depth.
+    // Ensure min notional at the LOWEST price (worst-case for buy levels).
     while (canonicalQty * config.lowerPrice < minNotional) {
       canonicalQty += minSize;
     }
@@ -2164,6 +2172,16 @@ export class GridBotInstance {
     this.injectedClient = client ?? null;
   }
 
+  // Per-bot paper/live gate. Reemplaza el viejo `process.env.DRY_RUN` GLOBAL: ahora
+  // CADA bot decide. paper_mode=1 (default) → dry-run (simula, no toca GRVT, sin dinero
+  // real); paper_mode=0 → live (órdenes reales). GRID_FORCE_PAPER=true es un kill-switch
+  // global que fuerza TODOS a paper (freno de emergencia). Solo el pump-reader es siempre
+  // paper; el grid ahora opera real por-bot según esta bandera.
+  private isDryRun(): boolean {
+    if (process.env.GRID_FORCE_PAPER === 'true') return true;
+    return Number((this.bot as any)?.paper_mode ?? 1) !== 0;
+  }
+
   /** Accessor for the GRVT client this bot should use. Falls back
    *  to the legacy singleton if no per-user client was injected. */
   private get grvt(): GRVTClient {
@@ -2283,7 +2301,7 @@ export class GridBotInstance {
     }
 
     // ⚠️ DRY RUN warning
-    if (process.env.DRY_RUN === 'true') {
+    if (this.isDryRun()) {
       log.info(`🧪 [DRY RUN] Bot ${this.bot.id}: Modo testing activado - NO se colocarán órdenes reales`);
     }
 
@@ -2353,7 +2371,7 @@ export class GridBotInstance {
       }
     }
 
-    log.info(`✅ [DEBUG] Bot ${this.bot.id}: RESUMEN - ${ordersPlaced}/${ordersToPlace} órdenes ${process.env.DRY_RUN === 'true' ? '(simuladas)' : 'colocadas'}, ${ordersSkipped} saltadas`);
+    log.info(`✅ [DEBUG] Bot ${this.bot.id}: RESUMEN - ${ordersPlaced}/${ordersToPlace} órdenes ${this.isDryRun() ? '(simuladas)' : 'colocadas'}, ${ordersSkipped} saltadas`);
     log.info(`🎯 [DEBUG] Bot ${this.bot.id}: TERMINADO placeInitialOrders()`);
   }
 
@@ -2393,7 +2411,7 @@ export class GridBotInstance {
     }
 
     try {
-      if (process.env.DRY_RUN === 'true') {
+      if (this.isDryRun()) {
         log.info(`🧪 [DRY RUN] Bot ${this.bot.id}: COMPRA INICIAL que se ejecutaría: BUY ${totalQuantityNeeded} ${this.bot.pair} @ MARKET [notional: $${notionalUSDT.toFixed(2)}]`);
         
         // En dry run, simular la compra
@@ -2625,7 +2643,7 @@ export class GridBotInstance {
       log.debug(`Min_notional OK: $${notional.toFixed(2)} >= $${minNotional}`);
 
       // 🧪 DRY RUN MODE: Solo loguear las órdenes que se colocarían
-      if (process.env.DRY_RUN === 'true') {
+      if (this.isDryRun()) {
         log.info(`🧪 [DRY RUN] ORDEN QUE SE COLOCARÍA: ${level.side.toUpperCase()} ${level.quantity} ${this.bot.pair} @ $${level.price} (nivel ${level.level_index}) [notional: $${notional.toFixed(2)}]`);
         
         // En dry run, crear orden fake en database para testing

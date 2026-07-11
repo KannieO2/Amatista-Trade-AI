@@ -42,6 +42,8 @@ export interface BotSummary {
   active_window_size?: number | null;
   // H.5: optional sub-account this bot routes through. NULL = default creds.
   grvt_sub_account_id?: number | null;
+  // Per-bot paper/live. 1 = paper (dry-run, sin dinero real), 0 = live (real).
+  paper_mode?: 0 | 1;
 }
 
 export interface GridLevel {
@@ -276,6 +278,8 @@ export interface ValidateBotInput {
   active_window_size?: number;
   // H.5: optional sub-account routing. Null/missing = default creds.
   grvt_sub_account_id?: number | null;
+  // Per-bot paper/live. true/missing = paper (seguro), false = live (real).
+  paper_mode?: boolean;
 }
 
 // H.5: GRVT sub-account row as the dashboard sees it (no encrypted fields).

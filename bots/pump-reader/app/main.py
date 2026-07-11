@@ -2359,7 +2359,17 @@ async def _grid_token_for(request: Request) -> str | None:
     guarda/manda el token. El password derivado nunca llega al browser."""
     import time
 
-    user = getattr(request.state, "user", None) or {"id": "owner"}
+    user = getattr(request.state, "user", None)
+    if user is None:
+        # El middleware que setea request.state.user NO corre para conexiones
+        # WebSocket (Starlette BaseHTTPMiddleware sólo aplica a HTTP). Leer el
+        # usuario del cookie TradeOS directamente → mintea el token del DUEÑO
+        # real (Jesús / owner), no un fallback "owner" que rompería aislamiento.
+        try:
+            user = read_token(request.cookies.get(COOKIE))
+        except Exception:  # noqa: BLE001 - best-effort, cae a owner abajo
+            user = None
+    user = user or {"id": "owner"}
     uid = str(user.get("id") or "owner")
     now = time.time()
     cached = _grid_token_cache.get(uid)
