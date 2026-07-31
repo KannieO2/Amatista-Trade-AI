@@ -562,7 +562,8 @@ DASHBOARD_HTML = r"""<!doctype html>
 
     <!-- ============ GRVT VIEW (full-bleed embed) ============ -->
     <section class="view hidden" id="view-grvt">
-      <iframe id="grvt-frame" title="GRVTBot"></iframe>
+      <iframe id="grvt-frame" title="GRVTBot" style="display:none"></iframe>
+      <div class="empty" id="grvt-loading" style="text-align:center;padding:60px 18px;opacity:.7">Cargando Grid Bot…</div>
       <div class="empty" id="grvt-offline" style="display:none;text-align:left;padding:14px 18px">
         GRVTBot no responde. Inicia el proceso Node: ejecuta <b>start-grvtbot.bat</b> y recarga la página.
       </div>
@@ -1160,12 +1161,13 @@ async function loadGrvt(){
   // same-origin through the /grid/* reverse proxy. Nothing to render here — we
   // only probe the Node backend once so we can show a friendly note if it's
   // not running (otherwise the iframe just shows a blank/error page).
-  const off=$("grvt-offline"), fr=$("grvt-frame");
+  const off=$("grvt-offline"), fr=$("grvt-frame"), ld=$("grvt-loading");
   // RAPIDEZ del paso pump↔grid: el SPA se monta UNA vez y se queda caliente. Los
   // switches posteriores solo togglean visibilidad (el .view>* riseIn da la entrada)
   // → cambio INSTANTÁNEO en vez de rebootear el bundle Node cada vez (antes: src con
   // cache-buster Date.now() forzaba reload completo en cada click de "Grid Bot").
-  if(grvtLoaded){ if(off)off.style.display="none"; if(fr)fr.style.display="block"; return; }
+  if(grvtLoaded){ if(off)off.style.display="none"; if(ld)ld.style.display="none"; if(fr)fr.style.display="block"; return; }
+  if(ld) ld.style.display="block";
   try{
     const r=await fetch("/grid/api/health",{cache:"no-store"});
     if(!r.ok) throw 0;
@@ -1179,13 +1181,13 @@ async function loadGrvt(){
     if(j && j.ok && j.token){ localStorage.setItem(j.key||"grvt-grid-token", j.token); }
     if(off) off.style.display="none";
     if(fr){
-      fr.style.display="block";
       const t=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";
-      fr.onload=()=>postGridTheme();           // sync theme once the SPA boots
+      fr.onload=()=>{ postGridTheme(); if(ld) ld.style.display="none"; fr.style.display="block"; };
       fr.src="/grid/dashboard/?theme="+t+"&sso="+Date.now();
       grvtLoaded=true;                          // caliente: próximos switches = instantáneos
     }
   }catch(e){
+    if(ld) ld.style.display="none";
     if(off) off.style.display="block";
     if(fr) fr.style.display="none";
   }

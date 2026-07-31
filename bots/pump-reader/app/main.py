@@ -2834,6 +2834,18 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
         _record_learning(candidate.symbol, "skip_fading", "paper", candidate,
                          "rompió pero revierte (último close < máx 3 velas) — fake-out, no breakout vivo")
         return False
+    # VOLUMEN REAL detrás de la ignición (fsm_path/accumulation): un +0.6% de lean sin
+    # volumen no es un criminal-pump, es ruido — 490 trades de este libro medían 5.7%
+    # win rate / -$928 porque entraba con solo el "lean" sin confirmar compra real. La
+    # misma vara que ya protegía el path momentum (ENTRY_MIN_BREAKOUT_VOL) se exige acá.
+    # onchain_lead sigue siendo su propia confirmación (waivea, ya es convicción externa).
+    if fsm_path and not skip_gates and not onchain_lead:
+        entry_vol = accel if accel is not None else candidate.volume_spike
+        if entry_vol is not None and entry_vol < ENTRY_MIN_BREAKOUT_VOL:
+            _record_learning(candidate.symbol, "skip_no_volume_break", "paper", candidate,
+                             f"acumulación sin volumen real ({entry_vol:.1f}x < {ENTRY_MIN_BREAKOUT_VOL:.1f}x avg) — "
+                             f"lean sin compra detrás, no es un criminal-pump confirmado")
+            return False
     if not fsm_path and not skip_gates:
         # (b) anti-FLAT: require a CONFIRMED up-break so the momentum path doesn't buy
         # a flat base that breaks 50/50 (the MFE=+0.0% churn). Entry only in the band

@@ -25,6 +25,11 @@ COPY package.json package-lock.json ./
 COPY packages/bot/package.json packages/bot/
 COPY packages/bot/tsconfig.json packages/bot/
 
+# sqlite3's prebuilt binary can target a newer glibc than this base image
+# ships (seen as "GLIBC_2.38 not found" at runtime even though build+runtime
+# use the same bookworm-slim tag) — force a from-source build so the native
+# addon links against the glibc actually present in this image.
+ENV npm_config_build_from_source=true
 RUN npm ci --workspace=@grvt-grid/bot --include-workspace-root
 
 # Now copy the source and build

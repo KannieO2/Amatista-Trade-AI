@@ -1,0 +1,16 @@
+# Local-dev only override: this project lives inside OneDrive, and OneDrive's
+# sync process locks files it's watching. SQLite (WAL mode) needs real file
+# locks, so bind-mounting bots/grvtbot/data straight from OneDrive throws
+# SQLITE_IOERR: disk I/O error under Docker Desktop/WSL2. The VM deploy has no
+# OneDrive, so docker-compose.yml stays untouched — this file only applies
+# when running `docker compose` from this OneDrive checkout on Windows.
+# Not used in prod: don't commit real data expectations here, it's a fresh db.
+services:
+  grvtbot:
+    volumes:
+      - grvtbot-data:/app/data
+      - grvtbot-logs:/app/logs
+
+volumes:
+  grvtbot-data:
+  grvtbot-logs:
