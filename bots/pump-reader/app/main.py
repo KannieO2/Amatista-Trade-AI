@@ -3022,6 +3022,19 @@ async def _auto_enter(bot: UserBot, candidate: TokenCandidate, accel: float | No
             _record_learning(candidate.symbol, "skip_concentrated", "paper", candidate,
                              f"holders concentrados (top1 {_sec.get('top1_whale_pct', 0)}% / top10 {_sec.get('top10_pct', 0)}%) — rug-prone")
             return False
+        # CONTRATO PELIGROSO (honeypot / cannot_sell_all / blacklist / sell_tax>=10%):
+        # antes _mark_dangerous solo LOGUEABA la señal (línea ~1524) pero no bloqueaba
+        # la entrada — un honeypot confirmado por GoPlus podía comprarse igual. Gate
+        # duro: si GoPlus ya marcó el contrato como peligroso, no entres.
+        if _sec and _sec.get("dangerous_contract"):
+            _mark_dangerous(candidate.exchange, candidate.symbol)
+            _learn_dangerous(candidate, f"contrato peligroso (honeypot={_sec.get('honeypot')} "
+                             f"cannot_sell={_sec.get('cannot_sell')} blacklist={_sec.get('blacklist')} "
+                             f"sell_tax={_sec.get('sell_tax')}%)")
+            _record_learning(candidate.symbol, "skip_dangerous_contract", "paper", candidate,
+                             f"GoPlus: honeypot={_sec.get('honeypot')} cannot_sell={_sec.get('cannot_sell')} "
+                             f"blacklist={_sec.get('blacklist')} sell_tax={_sec.get('sell_tax')}%")
+            return False
     # DATA-DRIVEN precision ceilings — SOLO tesis PREPUMP (microcaps acumulando).
     # GAINERS es momentum cap-agnóstico (volume>6x en cualquier token = el edge) →
     # entra con skip_gates=True y SALTA estos techos, usando SUS propios gates
