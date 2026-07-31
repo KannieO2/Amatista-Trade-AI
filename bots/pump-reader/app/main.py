@@ -626,13 +626,20 @@ async def lifespan(app: FastAPI):
 # volume. Auto-set halts carry an "auto:" reason and auto-clear once the market
 # recovers; a kill switch set MANUALLY via the API is never auto-cleared.
 KILL_FAIL_LIMIT = int(os.getenv("PUMP_KILL_FAIL_LIMIT", "3"))
-KILL_VOL_DROP_PCT = float(os.getenv("PUMP_KILL_VOL_DROP_PCT", "60"))
+KILL_VOL_DROP_PCT = float(os.getenv("PUMP_KILL_VOL_DROP_PCT", "80"))
+# EMA alpha for vol_baseline: slow on purpose. A fast alpha chases the very
+# noise it's supposed to be a stable reference against, causing normal
+# scan-to-scan volume variance to repeatedly false-positive as a "crash"
+# (observed: kill switch flapping on/off every 3-5 min with no real crash).
+KILL_VOL_EMA_ALPHA = float(os.getenv("PUMP_KILL_VOL_EMA_ALPHA", "0.05"))
+KILL_VOL_MIN_SAMPLES = int(os.getenv("PUMP_KILL_VOL_MIN_SAMPLES", "5"))
 
 
 class _KillMonitor:
     def __init__(self) -> None:
         self.fails = 0
         self.vol_baseline = 0.0    # EMA of healthy total scan volume
+        self.vol_samples = 0       # scans folded into vol_baseline so far
         self.auto_active = False
 
     def _halt(self, reason: str) -> None:
@@ -661,12 +668,16 @@ class _KillMonitor:
 
     async def on_success(self, total_volume: float) -> None:
         self.fails = 0
-        crash = (self.vol_baseline > 0 and 0 < total_volume
+        # Require a warmed-up baseline (several scans) before trusting a "crash"
+        # verdict — otherwise the first few noisy readings can trip it.
+        crash = (self.vol_baseline > 0 and self.vol_samples >= KILL_VOL_MIN_SAMPLES
+                 and 0 < total_volume
                  < self.vol_baseline * (1 - KILL_VOL_DROP_PCT / 100))
         if total_volume > 0:  # slow EMA; decays during a halt so it self-heals
-            alpha = 0.1 if crash else 0.3
+            alpha = KILL_VOL_EMA_ALPHA / 2 if crash else KILL_VOL_EMA_ALPHA
             self.vol_baseline = (total_volume if self.vol_baseline == 0
                                  else (1 - alpha) * self.vol_baseline + alpha * total_volume)
+            self.vol_samples += 1
         if crash and not self.auto_active:
             self._halt("caída brusca de volumen de mercado")
             await notify.send_system("KILL SWITCH (auto): caída brusca de volumen. Trading detenido.")
