@@ -94,11 +94,13 @@ def _prepump_max_hold_min() -> float:
 
 
 def _prepump_faded_cut_min() -> float:
-    """Responsive volume-collapse cut (user: 'si baja el volumen de compra, salir').
-    A flat accumulation whose 1m volume has STAYED faded (< VOLUME_ALIVE_FRAC of peak)
-    this many minutes is cut NOW instead of waiting the 6h flat timeout — the fuel for
-    the ignition is gone. 0 disables (fall back to the old 6h gate)."""
-    return float(os.getenv("PUMP_PREPUMP_FADED_CUT_MINUTES", "45"))
+    """Responsive volume-collapse cut (user: 'si baja el volumen de compra, salir
+    enseguida'). A non-winning accumulation whose 1m volume has STAYED faded
+    (< VOLUME_ALIVE_FRAC of peak) this many minutes is cut NOW instead of waiting
+    the 6h flat timeout — the fuel for the ignition is gone. Was 45min/flat-only;
+    user wants it fast — 10min catches the fade before it round-trips into a loss.
+    0 disables (fall back to the old 6h gate)."""
+    return float(os.getenv("PUMP_PREPUMP_FADED_CUT_MINUTES", "10"))
 
 
 def exit_profile(cluster: str, book: str = "prepump") -> dict:
@@ -280,14 +282,18 @@ class PositionManager:
             events.append(self._sell(pos, price, 1.0, "trailing"))
             return events
         # Responsive VOLUME-COLLAPSE cut (prepump) — user: "analizar si baja el volumen
-        # de compra para salir". The fuel gauge: track how long the 1m volume has STAYED
-        # faded (< VOLUME_ALIVE_FRAC of the peak). On a FLAT trade (|gain| <= band; a
-        # moving one is owned by TP/trail/stop) that's been faded for FADED_CUT_MINUTES,
-        # the accumulation isn't igniting → free the capital NOW (not at the 6h timeout).
+        # de compra para salir enseguida". The fuel gauge: track how long the 1m volume
+        # has STAYED faded (< VOLUME_ALIVE_FRAC of the peak). Any NON-WINNING trade
+        # (gain <= band — flat OR losing; a trade winning past the band is already owned
+        # by the trailing-stop check above, which returns first) that's been faded for
+        # FADED_CUT_MINUTES, the accumulation isn't igniting → free the capital NOW
+        # instead of riding it down to the hard-stop or the 6h flat timeout. Was
+        # flat-only (|gain|<=band); widened to gain<=band so a LOSING trade with dead
+        # volume also gets cut fast, not just a flat one.
         # vol_fade_since resets the instant volume revives, so a brief dip never cuts.
         _fcm = _prepump_faded_cut_min()
         if (pos.book == "prepump" and _fcm > 0 and pos.peak_volume > 0
-                and pos.last_volume > 0 and abs(gain) <= TIMEOUT_BAND_PCT):
+                and pos.last_volume > 0 and gain <= TIMEOUT_BAND_PCT):
             if pos.last_volume < VOLUME_ALIVE_FRAC * pos.peak_volume:
                 pos.vol_fade_since = pos.vol_fade_since or now
                 if (now - pos.vol_fade_since).total_seconds() / 60 >= _fcm:
