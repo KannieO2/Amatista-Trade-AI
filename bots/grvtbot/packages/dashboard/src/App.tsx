@@ -11,10 +11,6 @@ import { ConfirmHost } from './components/primitives/confirm-dialog';
 import { OverviewPage } from './pages/overview';
 import { BotsListPage } from './pages/bots-list';
 import { SettingsPage } from './pages/settings';
-import { LoginPage } from './pages/login';
-import { SignupPage } from './pages/signup';
-import { ForgotPasswordPage } from './pages/forgot-password';
-import { ResetPasswordPage } from './pages/reset-password';
 import { GrvtOnboardingPage } from './pages/onboarding/grvt';
 
 // Bot Detail owns the heaviest dependencies (lightweight-charts + recharts).
@@ -89,11 +85,12 @@ export default function App() {
         <AuthProvider>
           <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '')}>
           <Routes>
-            {/* Public auth routes — no AppShell, no ProtectedRoute */}
-            <Route path="login" element={<LoginPage />} />
-            <Route path="signup" element={<SignupPage />} />
-            <Route path="forgot-password" element={<ForgotPasswordPage />} />
-            <Route path="reset-password" element={<ResetPasswordPage />} />
+            {/* Sin rutas de auth propias: Amatista es el único login de la
+                plataforma y su proxy siembra el token antes de que arranque
+                este bundle. Las páginas login/signup/forgot/reset se
+                eliminaron — el proxy ya respondía 403 a /auth/login y
+                /auth/signup, así que eran formularios sin salida. Cuando falta
+                el token, ProtectedRoute explica que hay que recargar. */}
             <Route
               path="onboarding/grvt"
               element={

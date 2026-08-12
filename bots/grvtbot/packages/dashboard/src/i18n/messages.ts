@@ -98,6 +98,14 @@ export const MESSAGES = {
         grvtReferralLink: '→ Crear cuenta GRVT (referido)',
         grvtReferralAfter: '¿Ya tenés GRVT? Continuá con el signup acá abajo.',
       },
+      // El grid no tiene login propio: la única sesión es la de Amatista y el
+      // proxy la inyecta. Si aun así el SPA se queda sin token, esto explica
+      // qué pasó en vez de mostrar un formulario que el proxy rechaza con 403.
+      sessionRequired: {
+        title: 'Sesión expirada',
+        body: 'El bot grid usa la sesión de Amatista. Recargá la página para renovarla.',
+        reload: 'Recargar',
+      },
       login: {
         title: 'Iniciar sesión',
         subtitle: 'Accedé a tu bot grid',
@@ -839,6 +847,11 @@ export const MESSAGES = {
           'This bot trades on your GRVT account via API — you need one before you can use it. If you sign up with our referral link you get benefits and help support the project.',
         grvtReferralLink: '→ Create GRVT account (referral)',
         grvtReferralAfter: 'Already have GRVT? Continue with the signup below.',
+      },
+      sessionRequired: {
+        title: 'Session expired',
+        body: 'The grid bot uses your Amatista session. Reload the page to renew it.',
+        reload: 'Reload',
       },
       login: {
         title: 'Sign in',
