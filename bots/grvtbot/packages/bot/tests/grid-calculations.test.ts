@@ -307,7 +307,7 @@ describe('GridEngine.calculateGridLevels', () => {
     ).rejects.toThrow(/fuera del rango/);
   });
 
-  it('qty floors at 0.03 for tiny investments', async () => {
+  it('qty floors at the instrument min_size and clears min_notional', async () => {
     const result = await engine.calculateGridLevels({
       pair: 'ETH_USDT_Perp',
       direction: 'long',
@@ -318,7 +318,15 @@ describe('GridEngine.calculateGridLevels', () => {
       investmentUSDT: 100, // very small
     });
 
-    expect(result.quantityPerGrid).toBeGreaterThanOrEqual(0.03);
+    // The floor is the instrument's real min_size — NOT a hardcoded 0.03,
+    // which silently inflated order notional on low-priced pairs.
+    // ETH spec per the getInstrumentSpec mock above: min_size 0.01 / min_notional 20.
+    const minSize = 0.01;
+    const minNotional = 20;
+    expect(result.quantityPerGrid).toBeGreaterThanOrEqual(minSize);
+    // Still large enough that a buy at the LOWEST level clears the exchange
+    // minimum notional (worst case for buy levels).
+    expect(result.quantityPerGrid * 1800).toBeGreaterThanOrEqual(minNotional);
   });
 
   it('liquidation price is included in result', async () => {

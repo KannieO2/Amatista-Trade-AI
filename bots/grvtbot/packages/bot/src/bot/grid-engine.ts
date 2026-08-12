@@ -107,9 +107,15 @@ export function computeQtyPerLevel(
   const ORDER_ALLOC = 0.75;
   const effCap = investmentUsdt * leverage * ORDER_ALLOC;
   const { min_size: minSize, min_notional: minNotional } = getInstrumentSpec(pair);
+  // Floor at the instrument's real min_size, NOT a hardcoded 0.03 — same fix
+  // calculateGridLevels() already carries. This path (decideCompound →
+  // checkCompoundRebalance) writes straight into bot.quantity_per_level, so a
+  // 0.03 floor made the FIRST compound jump the order size on low-priced pairs
+  // regardless of the configured size (BNB @ $612: 0.02 → 0.03, +50% notional
+  // in one step). The min_notional loop below still clears the exchange floor.
   let qty = Math.max(
     Math.ceil((effCap / numGrids / midPrice) * 100) / 100,
-    0.03
+    minSize
   );
   // Ensure min notional at lowest likely price
   
@@ -341,7 +347,21 @@ const SAFEGUARD_MAINTENANCE_MARGIN = 0.005;
  */
 export function computeLiqPriceLocal(bot: GridBot): number | null {
   if (!bot.avg_entry_price || bot.avg_entry_price <= 0) return null;
-  const factor = 1 / bot.leverage - SAFEGUARD_MAINTENANCE_MARGIN;
+  // Use the EFFECTIVE leverage (real open notional / margin backing it), not
+  // just the configured bot.leverage. A grid accumulates position as buy levels
+  // fill, so the live exposure can sit well above what the nominal leverage
+  // implies — and the liquidation price moves with the real exposure, not the
+  // configured number. Taking the max of the two keeps this strictly
+  // conservative: identical to the old behavior when the position is within
+  // nominal, and it fires the safeguard EARLIER (never later) when it isn't.
+  // Margin basis matches validateSufficientBalance(): investment / leverage.
+  let effLeverage = bot.leverage;
+  const margin = bot.leverage > 0 ? bot.investment_usdt / bot.leverage : 0;
+  const notional = (bot.position_size ?? 0) * bot.avg_entry_price;
+  if (margin > 0 && notional > 0) {
+    effLeverage = Math.max(bot.leverage, notional / margin);
+  }
+  const factor = 1 / effLeverage - SAFEGUARD_MAINTENANCE_MARGIN;
   if (factor <= 0) return null;
   if (bot.direction === 'long') {
     return bot.avg_entry_price * (1 - factor);

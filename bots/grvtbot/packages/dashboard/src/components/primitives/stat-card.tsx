@@ -16,8 +16,15 @@ export function StatCard({ label, value, delta, className }: StatCardProps) {
   return (
     <div
       className={cn(
+        // No per-tile rounding: the parent strip already has rounded-lg +
+        // overflow-hidden, which clips the flush square tiles into the
+        // rounded-ends shape for free. Rounding tiles individually here
+        // fights that — Tailwind's `rounded-*-lg` utilities set BOTH corners
+        // on that side (e.g. rounded-l-lg = top-left AND bottom-left), so on
+        // a wrapping grid (grid-cols-2/3) the visual "first"/"last" child
+        // isn't always the row's actual edge, producing a stray rounded
+        // corner + seam in the middle of the strip.
         'flex flex-col gap-1 bg-bg-elevated p-4',
-        'first:rounded-l-lg last:rounded-r-lg',
         className
       )}
     >
