@@ -56,6 +56,12 @@ secrets/
 **/src/**/*.js.map
 **/src/**/*.d.ts
 **/src/**/*.d.ts.map
+# ...pero vite-env.d.ts es FUENTE, no artefacto: declara los tipos de
+# import.meta.env y de los imports de .css. Sin él, `tsc -b` del dashboard
+# falla en un clon limpio ("Property 'env' does not exist on type
+# 'ImportMeta'") y la imagen no se puede construir. Localmente no se notaba
+# porque el build de Docker reusaba una capa cacheada.
+!**/src/vite-env.d.ts
 **/tests/**/*.js
 **/tests/**/*.js.map
 **/tests/**/*.d.ts
