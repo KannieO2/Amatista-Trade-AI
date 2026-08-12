@@ -163,6 +163,37 @@ for env_rel in ".env" "bots/grvtbot/.env" "bots/pump-reader/.env"; do
   fi
 done
 
+# ── 5b. Aura (opcional) ──────────────────────────────────────────────────
+# Aura corre en su propio stack con PostgreSQL, que NO se respalda copiando
+# archivos: hay que usar pg_dump contra la base viva. Se activa poniendo
+# AURA_DB_CONTAINER (y AURA_DIR si querés incluir su .env).
+if [ -n "${AURA_DB_CONTAINER:-}" ]; then
+  if docker inspect "$AURA_DB_CONTAINER" >/dev/null 2>&1; then
+    pg_user="${AURA_PG_USER:-postgres}"
+    pg_db="${AURA_PG_DB:-aura}"
+    if docker exec "$AURA_DB_CONTAINER" \
+         pg_dump -U "$pg_user" -d "$pg_db" --no-owner > "$STAGE/aura-postgres.sql" 2>/dev/null; then
+      # Un dump vacío o truncado pasa desapercibido: exigimos que traiga SQL.
+      if grep -qE 'CREATE TABLE|COPY ' "$STAGE/aura-postgres.sql"; then
+        log "aura: pg_dump ok ($(du -h "$STAGE/aura-postgres.sql" | cut -f1))"
+      else
+        rm -f "$STAGE/aura-postgres.sql"
+        warn "aura: pg_dump salió vacío — revisá AURA_PG_USER/AURA_PG_DB"
+      fi
+    else
+      rm -f "$STAGE/aura-postgres.sql"
+      warn "aura: pg_dump falló contra $AURA_DB_CONTAINER"
+    fi
+  else
+    warn "aura: container '$AURA_DB_CONTAINER' no accesible"
+  fi
+
+  if [ -n "${AURA_DIR:-}" ] && [ -f "$AURA_DIR/.env" ]; then
+    cp "$AURA_DIR/.env" "$STAGE/env--aura.env"
+    log "aura: .env respaldado"
+  fi
+fi
+
 # ── 6. Empaquetar + cifrar ───────────────────────────────────────────────
 OUT="$BACKUP_DIR/amatista-$STAMP.tar.gz.enc"
 tar czf - -C "$STAGE" . \
