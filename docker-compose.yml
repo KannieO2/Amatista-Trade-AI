@@ -53,7 +53,7 @@ services:
       - ./bots/pump-reader/data:/app/data
     depends_on:
       - grvtbot
-    networks: [amatista]
+    networks: [amatista, web]     # `web` = red compartida con Caddy (ver networks abajo)
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "5"}
@@ -61,3 +61,13 @@ services:
 networks:
   amatista:
     driver: bridge
+  # Red compartida con el stack de Aura: Caddy vive ahí y es el único proceso en
+  # los puertos 80/443, así que necesita alcanzar a pump-reader por nombre.
+  # Estaba conectada A MANO en el VPS (`docker network connect`), y por eso un
+  # `docker compose up` que recreara el contenedor tumbaba el sitio con 502.
+  # Declarada acá sobrevive a cualquier recreación.
+  #
+  # Hay que crearla una vez por máquina ANTES de levantar el stack:
+  #     docker network create web
+  web:
+    external: true

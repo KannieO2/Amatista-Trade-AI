@@ -53,7 +53,12 @@ Amatista. Sin una red común, no se ven.
 docker network create web
 ```
 
-En **los dos** `docker-compose.yml`, agregar al final:
+Creala **antes** de levantar cualquiera de los dos stacks: el
+`docker-compose.yml` de Amatista ya la declara como `external`, así que sin ella
+`docker compose up` falla de entrada.
+
+Del lado de **Aura** todavía hay que editarlo a mano. Agregar al final de su
+`docker-compose.prod.yml`:
 
 ```yaml
 networks:
@@ -61,8 +66,14 @@ networks:
     external: true
 ```
 
-Y sumar `web` a las redes de `caddy` (Aura) y de `pump-reader` (Amatista).
-En `pump-reader`, además, **borrar la sección `ports:`** para que deje de
+y sumar `web` a las redes del servicio `caddy`.
+
+> Amatista conecta `pump-reader` a `web` desde el propio compose. Antes estaba
+> conectado a mano con `docker network connect`, y eso se pierde en cuanto el
+> contenedor se recrea: el primer `docker compose up --build` después dejaba a
+> Caddy sin backend y el sitio entero respondía 502.
+
+En `pump-reader` conviene además **borrar la sección `ports:`** para que deje de
 exponerse directo.
 
 ## 3. Clonar y levantar Amatista
