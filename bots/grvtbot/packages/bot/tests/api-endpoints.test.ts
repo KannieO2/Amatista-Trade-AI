@@ -574,6 +574,54 @@ describe('POST /api/v2/auth/signup — H-5 ADMIN_EMAIL gate', () => {
       expect.objectContaining({ is_admin: false })
     );
   });
+
+  // Despliegue privado: la URL es pública, así que sin lista blanca
+  // cualquiera que dé con ella puede crearse una cuenta en el servidor.
+  describe('SIGNUP_ALLOWED_EMAILS', () => {
+    const PREV_ALLOW = process.env.SIGNUP_ALLOWED_EMAILS;
+    afterAll(() => {
+      if (PREV_ALLOW === undefined) delete process.env.SIGNUP_ALLOWED_EMAILS;
+      else process.env.SIGNUP_ALLOWED_EMAILS = PREV_ALLOW;
+    });
+
+    it('deja registrarse a cualquiera cuando la lista no está definida', async () => {
+      delete process.env.SIGNUP_ALLOWED_EMAILS;
+      const gridBotDb = makeGridBotDbWithSignup();
+      const { app } = makeApp(gridBotDb);
+
+      const res = await request(app)
+        .post('/api/v2/auth/signup')
+        .send({ email: 'cualquiera@example.com', password: 'supersecret' });
+
+      expect(res.status).toBe(200);
+    });
+
+    it('rechaza con 403 un email que no está en la lista', async () => {
+      process.env.SIGNUP_ALLOWED_EMAILS = 'osvaldo@example.com,jesus@example.com';
+      const gridBotDb = makeGridBotDbWithSignup();
+      const { app } = makeApp(gridBotDb);
+
+      const res = await request(app)
+        .post('/api/v2/auth/signup')
+        .send({ email: 'intruso@example.com', password: 'supersecret' });
+
+      expect(res.status).toBe(403);
+      expect(gridBotDb.createUser).not.toHaveBeenCalled();
+    });
+
+    it('acepta los emails de la lista, sin importar mayúsculas ni espacios', async () => {
+      process.env.SIGNUP_ALLOWED_EMAILS = ' Osvaldo@Example.com , jesus@example.com ';
+      const gridBotDb = makeGridBotDbWithSignup();
+      const { app } = makeApp(gridBotDb);
+
+      const res = await request(app)
+        .post('/api/v2/auth/signup')
+        .send({ email: 'OSVALDO@example.com', password: 'supersecret' });
+
+      expect(res.status).toBe(200);
+      expect(gridBotDb.createUser).toHaveBeenCalled();
+    });
+  });
 });
 
 // ── SECURITY: rate limiting on auth endpoints (H-6) ─────────────────

@@ -453,6 +453,23 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: 'invalid email' });
     }
+    // Lista blanca de registro. Sin SIGNUP_ALLOWED_EMAILS el alta queda
+    // abierta (comportamiento del proyecto original, que es un servicio
+    // multiusuario). En un despliegue privado —dos socios operando su propia
+    // plata en su propio VPS— cualquiera que dé con la URL puede crearse
+    // cuenta, así que definir la lista deja entrar SOLO a esos correos.
+    // Se compara ya normalizado a minúsculas y sin espacios, igual que `email`.
+    const allowRaw = process.env.SIGNUP_ALLOWED_EMAILS?.trim();
+    if (allowRaw) {
+      const allowed = allowRaw
+        .split(',')
+        .map((e) => e.trim().toLowerCase())
+        .filter(Boolean);
+      if (!allowed.includes(email)) {
+        log.warn({ email, ip: req.ip }, 'signup rechazado: email fuera de la lista blanca');
+        return res.status(403).json({ error: 'signup is restricted on this instance' });
+      }
+    }
     if (password.length < 8) {
       return res.status(400).json({ error: 'password too short (min 8 chars)' });
     }
