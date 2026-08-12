@@ -575,6 +575,58 @@ describe('POST /api/v2/auth/signup — H-5 ADMIN_EMAIL gate', () => {
     );
   });
 
+  // Alta por admin: la única vía de crear cuentas cuando el registro
+  // público está cerrado.
+  describe('POST /admin/users', () => {
+    function makeAppWithUser(user: any) {
+      const gridBotDb = makeGridBotDbWithSignup({
+        getUserById: vi.fn().mockResolvedValue(user),
+      });
+      return { ...makeApp(gridBotDb), gridBotDb };
+    }
+
+    it('rechaza a un usuario que no es admin', async () => {
+      const { app, gridBotDb } = makeAppWithUser({ id: 5, is_admin: 0 });
+      const res = await request(app)
+        .post('/api/v2/admin/users')
+        .set('X-Api-Key', API_KEY)
+        .send({ email: 'nuevo@example.com', password: 'supersecret' });
+
+      expect(res.status).toBe(403);
+      expect(gridBotDb.createUser).not.toHaveBeenCalled();
+    });
+
+    it('deja al admin crear un usuario, sin devolver token', async () => {
+      const { app, gridBotDb } = makeAppWithUser({ id: 1, is_admin: 1 });
+      const res = await request(app)
+        .post('/api/v2/admin/users')
+        .set('X-Api-Key', API_KEY)
+        .send({ email: 'Jesus@Example.com', password: 'supersecret' });
+
+      expect(res.status).toBe(200);
+      // El alta no inicia sesión por el nuevo usuario.
+      expect(res.body.token).toBeUndefined();
+      expect(gridBotDb.createUser).toHaveBeenCalledWith(
+        expect.objectContaining({ email: 'jesus@example.com', is_admin: false })
+      );
+    });
+
+    it('no permite duplicar un email ya registrado', async () => {
+      const gridBotDb = makeGridBotDbWithSignup({
+        getUserById: vi.fn().mockResolvedValue({ id: 1, is_admin: 1 }),
+        getUserByEmail: vi.fn().mockResolvedValue({ id: 9 }),
+      });
+      const { app } = makeApp(gridBotDb);
+      const res = await request(app)
+        .post('/api/v2/admin/users')
+        .set('X-Api-Key', API_KEY)
+        .send({ email: 'repetido@example.com', password: 'supersecret' });
+
+      expect(res.status).toBe(409);
+      expect(gridBotDb.createUser).not.toHaveBeenCalled();
+    });
+  });
+
   // Despliegue privado: la URL es pública, así que sin lista blanca
   // cualquiera que dé con ella puede crearse una cuenta en el servidor.
   describe('SIGNUP_ALLOWED_EMAILS', () => {
