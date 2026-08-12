@@ -2383,7 +2383,14 @@ async def _grid_token_for(request: Request) -> str | None:
             user = read_token(request.cookies.get(COOKIE))
         except Exception:  # noqa: BLE001 - best-effort, cae a owner abajo
             user = None
-    user = user or {"id": "owner"}
+    # Sin usuario resuelto NO se mintea nada cuando el login está activo. El
+    # fallback a "owner" era defensa-en-profundidad al revés: convertía una
+    # petición anónima en una sesión del dueño. En dev (sin APP_PASSWORD) se
+    # mantiene para no pedir login local.
+    if user is None:
+        if auth_enabled():
+            return None
+        user = {"id": auth_mod.OWNER_UID}
     uid = str(user.get("id") or "owner")
     now = time.time()
     cached = _grid_token_cache.get(uid)

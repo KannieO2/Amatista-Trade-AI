@@ -367,6 +367,17 @@ async def _pump_upstream_to_client(ws: WebSocket, up) -> None:
 
 
 async def _proxy_ws(ws: WebSocket) -> None:
+    # El gate de auth de main.py es un @app.middleware("http"): Starlette NO lo
+    # corre para WebSockets. Sin este chequeo la conexión llegaba sin cookie,
+    # _grid_token_for caía a su fallback "owner" y el proxy inyectaba el JWT del
+    # DUEÑO: cualquiera en internet abría /grid/ws y quedaba autenticado como él
+    # (los canales bot:<id> del dueño pasaban authorizeChannel). Verificado con
+    # un handshake sin cookie: devolvía 101 + hello en vez de cerrar.
+    from .auth import COOKIE, auth_enabled, read_token
+
+    if auth_enabled() and read_token(ws.cookies.get(COOKIE)) is None:
+        await ws.close(code=4401)
+        return
     await ws.accept()
     query = ws.scope.get("query_string", b"").decode()
     # AISLAMIENTO + FIX "invalid/expired JWT": el SPA abre el WS con el token que
