@@ -78,9 +78,12 @@ export function LoginPage() {
           </Button>
         </form>
 
-        {/* Sin enlace a registro: en este despliegue las cuentas las crea el
-            admin (POST /api/v2/admin/users). La ruta /signup tampoco existe
-            y el endpoint público queda cerrado por SIGNUP_ALLOWED_EMAILS. */}
+        <p className="text-xs text-text-muted text-center">
+          {t('auth.login.noAccount')}{' '}
+          <Link to="/signup" className="text-primary hover:underline">
+            {t('auth.login.signUp')}
+          </Link>
+        </p>
       </div>
     </div>
   );

@@ -453,23 +453,6 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: 'invalid email' });
     }
-    // Lista blanca de registro. Sin SIGNUP_ALLOWED_EMAILS el alta queda
-    // abierta (comportamiento del proyecto original, que es un servicio
-    // multiusuario). En un despliegue privado —dos socios operando su propia
-    // plata en su propio VPS— cualquiera que dé con la URL puede crearse
-    // cuenta, así que definir la lista deja entrar SOLO a esos correos.
-    // Se compara ya normalizado a minúsculas y sin espacios, igual que `email`.
-    const allowRaw = process.env.SIGNUP_ALLOWED_EMAILS?.trim();
-    if (allowRaw) {
-      const allowed = allowRaw
-        .split(',')
-        .map((e) => e.trim().toLowerCase())
-        .filter(Boolean);
-      if (!allowed.includes(email)) {
-        log.warn({ email, ip: req.ip }, 'signup rechazado: email fuera de la lista blanca');
-        return res.status(403).json({ error: 'signup is restricted on this instance' });
-      }
-    }
     if (password.length < 8) {
       return res.status(400).json({ error: 'password too short (min 8 chars)' });
     }
@@ -1494,41 +1477,6 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
   // The order is placed independently of the grid — it does NOT touch
   // grid_levels, the engine's monitor will not interfere because it
   // only manages levels (this is just a position adjustment).
-  // ── POST /api/v2/admin/users ────────────────────────────────────────
-  // Alta de usuarios hecha por el admin. En un despliegue privado el
-  // registro público no existe (la pantalla se quitó del dashboard y
-  // /auth/signup queda cerrado por SIGNUP_ALLOWED_EMAILS), así que esta es
-  // la única vía para dar de alta a un socio. Devuelve el usuario creado,
-  // NUNCA un token: el alta no inicia sesión por él, entra con su clave.
-  router.post('/admin/users', asyncHandler(async (req, res) => {
-    const me = await gridBotDb.getUserById(req.userId!);
-    if (!me?.is_admin) {
-      return res.status(403).json({ error: 'admin required' });
-    }
-    const body = (req.body ?? {}) as { email?: unknown; password?: unknown; is_admin?: unknown };
-    const email = String(body.email ?? '').trim().toLowerCase();
-    const password = String(body.password ?? '');
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({ error: 'invalid email' });
-    }
-    if (password.length < 8) {
-      return res.status(400).json({ error: 'password too short (min 8 chars)' });
-    }
-    const existing = await gridBotDb.getUserByEmail(email);
-    if (existing) {
-      return res.status(409).json({ error: 'email already registered' });
-    }
-    const password_hash = await hashPassword(password);
-    const userId = await gridBotDb.createUser({
-      email,
-      password_hash,
-      is_admin: body.is_admin === true,
-    });
-    log.info({ adminId: me.id, newUserId: userId, email }, 'usuario creado por admin');
-    res.json({ userId, email, isAdmin: body.is_admin === true });
-    return;
-  }));
-
   router.post('/admin/manual-trade', asyncHandler(async (req, res) => {
     // Admin only.
     const me = await gridBotDb.getUserById(req.userId!);

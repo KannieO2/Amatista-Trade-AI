@@ -12,6 +12,7 @@ import { OverviewPage } from './pages/overview';
 import { BotsListPage } from './pages/bots-list';
 import { SettingsPage } from './pages/settings';
 import { LoginPage } from './pages/login';
+import { SignupPage } from './pages/signup';
 import { ForgotPasswordPage } from './pages/forgot-password';
 import { ResetPasswordPage } from './pages/reset-password';
 import { GrvtOnboardingPage } from './pages/onboarding/grvt';
@@ -90,9 +91,7 @@ export default function App() {
           <Routes>
             {/* Public auth routes — no AppShell, no ProtectedRoute */}
             <Route path="login" element={<LoginPage />} />
-            {/* Ruta /signup retirada: las cuentas las crea el admin vía
-                POST /api/v2/admin/users. Cualquier /signup cae al catch-all
-                de abajo y termina en el login. */}
+            <Route path="signup" element={<SignupPage />} />
             <Route path="forgot-password" element={<ForgotPasswordPage />} />
             <Route path="reset-password" element={<ResetPasswordPage />} />
             <Route
