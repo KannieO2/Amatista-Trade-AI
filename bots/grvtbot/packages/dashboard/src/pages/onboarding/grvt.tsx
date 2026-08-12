@@ -51,8 +51,17 @@ export function GrvtOnboardingPage() {
     }
   }
 
+  // This page is embedded (no AppShell/sidebar) inside the Amatista
+  // pump-reader shell's Grid Bot iframe, whose own topbar floats
+  // absolutely over the top ~60px of the iframe starting at left:212px
+  // (it expects a sidebar there, which this standalone page doesn't have).
+  // gridGutter recreates that 212px rail so the floating topbar has
+  // something to sit next to instead of an empty void, and pt-20 keeps
+  // the title/toggle clear of the topbar's height.
   return (
-    <div className="min-h-dvh flex items-center justify-center p-4 bg-bg-base">
+    <div className="min-h-dvh flex bg-bg-base">
+      <div className="hidden md:block w-[212px] shrink-0 bg-bg-surface border-r border-border-subtle" />
+      <div className="flex-1 flex items-center justify-center p-4 pt-20">
       <div className="w-full max-w-lg space-y-6">
         <div className="flex justify-end">
           <LanguageToggle />
@@ -152,6 +161,7 @@ export function GrvtOnboardingPage() {
         <p className="text-2xs text-text-muted text-center">
           {t('onboarding.grvt.canUpdateLater')}
         </p>
+      </div>
       </div>
     </div>
   );

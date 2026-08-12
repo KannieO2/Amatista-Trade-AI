@@ -1594,8 +1594,11 @@ async def _handle_listing(ev: dict, venue: str) -> None:
             )
         except Exception:
             logger.exception("%s record_alert failed", venue)
-        # Optional paper entry (master switch). Conviction sizing via setup_hint.
-        if COINBASE_LISTING_ENTER and current_mode() == ExecMode.paper:
+        # Optional entry (master switch). Conviction sizing via setup_hint. Runs in
+        # BOTH paper and live — was gated to paper-only, which meant listing-triggered
+        # entries (Binance/Upbit/Coinbase effect) could never fire once the bot went
+        # live; capital protections (kill-switch/drawdown/forensic) still apply below.
+        if COINBASE_LISTING_ENTER:
             cand.cluster = "long_pump"
             for bot in all_bots():
                 if bot.auto_entry and not bot.pm.has(cand.exchange, cand.symbol):
