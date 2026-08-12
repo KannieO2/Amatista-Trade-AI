@@ -1707,12 +1707,55 @@ export class GridEngine extends EventEmitter {
             metadata: `dca_${bot.id}_${Date.now()}`,
           }, true);
 
-          await db.updateBot(bot.id, {
+          // The order is IOC: it fills what it can against the book RIGHT NOW
+          // and cancels the rest, so a thin book means a partial fill or no
+          // fill at all. Crediting `position_size + size` unconditionally (the
+          // previous behavior) drifted the DB away from reality on every such
+          // order, and position_size feeds the liquidation estimate the
+          // safeguard runs on — an inflated size makes the safeguard read a
+          // liquidation price that doesn't exist.
+          //
+          // Read the real position back from GRVT instead of incrementing.
+          // That is both accurate for this fill and self-healing for any drift
+          // an earlier one left behind. Same verify-then-write shape as
+          // executeInitialPurchase(). If the read fails we leave position_size
+          // untouched — a stale value is safer than a fabricated one, and the
+          // monitor's updatePnL() refreshes it from GRVT on the next tick.
+          await new Promise((r) => setTimeout(r, 2000));
+          const updates: Record<string, unknown> = {
+            // Always stamp the attempt so a non-filling order can't turn the
+            // hourly check into a retry loop against the exchange.
             last_dca_at: new Date().toISOString(),
-            position_size: bot.position_size + size,
-          } as any);
+          };
+          let filled: number | null = null;
+          try {
+            const pos = await client.getPosition(bot.pair);
+            const realSize = pos ? Math.abs(parseFloat(pos.size)) : 0;
+            const realEntry = pos ? parseFloat(pos.entry_price) : 0;
+            filled = realSize - bot.position_size;
+            updates.position_size = realSize;
+            if (realEntry > 0) updates.avg_entry_price = realEntry;
+          } catch (posErr) {
+            log.warn(
+              { botId: bot.id, err: (posErr as Error).message },
+              'DCA: could not verify position after buy — leaving position_size as-is'
+            );
+          }
+          await db.updateBot(bot.id, updates as any);
 
-          log.info({ botId: bot.id, size, price: aggressivePrice }, 'DCA buy executed');
+          if (filled === null) {
+            log.info({ botId: bot.id, requested: size }, 'DCA buy sent (fill unverified)');
+          } else if (filled <= 0) {
+            log.warn(
+              { botId: bot.id, requested: size, price: aggressivePrice },
+              'DCA buy did NOT fill (IOC found no liquidity at the limit price)'
+            );
+          } else {
+            log.info(
+              { botId: bot.id, requested: size, filled, price: aggressivePrice },
+              filled + 1e-8 < size ? 'DCA buy PARTIALLY filled' : 'DCA buy executed'
+            );
+          }
         } catch (buyErr) {
           log.error({ botId: bot.id, err: (buyErr as Error).message }, 'DCA buy failed');
         }
