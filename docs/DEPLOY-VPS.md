@@ -78,11 +78,27 @@ cifra con otra clave. Hay que crearla acá y volver a cargar las credenciales
 de GRVT desde el dashboard.
 
 ```bash
-mkdir -p bots/grvtbot/data
+mkdir -p bots/grvtbot/data bots/grvtbot/logs/bot bots/pump-reader/data
 head -c 32 /dev/urandom > bots/grvtbot/data/master.key
 chmod 600 bots/grvtbot/data/master.key
-docker compose up -d
+
+# El container corre como el usuario grvtbot (uid 10000), no como root. Con
+# bind mount, las carpetas del host quedan de root y el proceso no puede
+# escribir: arranca, tira `SQLITE_CANTOPEN: unable to open database file` y
+# entra en bucle de reinicio. En local no pasa porque el override usa un
+# volumen de Docker, y ahí Docker ajusta el dueño solo.
+chown -R 10000:10000 bots/grvtbot/data bots/grvtbot/logs
+
+docker compose up -d --build
 ```
+
+> **Neutralizá el override antes de levantar.** `docker-compose.override.yml`
+> está versionado y `docker compose` lo aplica solo, pero es exclusivo del
+> checkout en OneDrive. En el VPS hay que sacarlo del camino:
+>
+> ```bash
+> mv docker-compose.override.yml docker-compose.override.yml.local-only
+> ```
 
 > El `docker-compose.override.yml` del repo es **solo para el checkout local en
 > OneDrive** (OneDrive rompe los locks de SQLite). En el VPS no aplica: los datos
