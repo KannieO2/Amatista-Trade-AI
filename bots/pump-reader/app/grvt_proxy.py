@@ -25,6 +25,7 @@ its own JWT login inside the iframe.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 
@@ -327,7 +328,43 @@ async def _proxy_http(request: Request, path: str) -> Response:
     # so a vanilla upstream build needs no patching.
     if "text/html" in ctype and b"</head>" in content:
         content = content.replace(b"</head>", _THEME_CSS + b"</head>", 1)
+        # UN SOLO LOGIN: sembrar el token ANTES de que arranque el bundle.
+        #
+        # El SPA decide si mostrar su login mirando localStorage['grvt-grid-token']
+        # (auth-context.tsx) — o sea, ANTES de hacer ninguna petición. Con el
+        # storage vacío se va a /login aunque este proxy inyecte el Authorization
+        # en cada llamada, y ahí queda un formulario muerto: el propio proxy
+        # responde 403 a api/v2/auth/login. Es la pantalla que vio Jesús.
+        #
+        # El dashboard de TradeOS ya siembra ese storage con fetch('/grid-sso'),
+        # pero corre en el padre y compite con el arranque del iframe; si el SSO
+        # falla, no siembra nada. Acá el token viaja horneado en el HTML: mismo
+        # origen, síncrono, sin carrera y sin request extra.
+        content = content.replace(b"</head>", await _sso_seed_script(request) + b"</head>", 1)
     return Response(content=content, status_code=upstream.status_code, headers=out_headers)
+
+
+async def _sso_seed_script(request: Request) -> bytes:
+    """<script> que deja la sesión del grid lista antes de que cargue el SPA."""
+    if _token_provider is None:
+        return b""
+    try:
+        tok = await _token_provider(request)
+    except Exception:  # noqa: BLE001 - best-effort, nunca rompe el proxy
+        logger.debug("sso seed token failed", exc_info=True)
+        return b""
+    if not tok:
+        return b""
+    return (
+        "<script>(function(){try{"
+        f"localStorage.setItem('grvt-grid-token',{json.dumps(tok)});"
+        # Si el SPA ya se había deslogueado y quedó parado en /login o /signup,
+        # devolverlo a la raíz: con el token puesto, esas rutas no tienen sentido.
+        "var p=location.pathname;"
+        "if(/\\/(login|signup)\\/?$/.test(p)){"
+        "history.replaceState(null,'',p.replace(/(login|signup)\\/?$/,''));}"
+        "}catch(e){}})();</script>"
+    ).encode()
 
 
 async def _pump_client_to_upstream(ws: WebSocket, up) -> None:
