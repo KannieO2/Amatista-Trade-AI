@@ -1297,16 +1297,13 @@ export class GridEngine extends EventEmitter {
     const effCap = config.investmentUSDT * config.leverage * ORDER_ALLOC;
     const { min_notional: minNotional, min_size: minSize } = getInstrumentSpec(config.pair);
     
-    // Floor at the instrument's real min_size (NOT a hardcoded 0.03): a
-    // $17 hardcode floor silently over-leveraged small-capital bots on
-    // low-priced pairs (e.g. BNB $8 @ 6x asked for 0.01/level but got
-    // 0.03 = 3x the notional → ~19x real). The min_notional loop below
-    // still guarantees each order clears the exchange minimum.
     let canonicalQty = Math.max(
       Math.ceil((effCap / config.numGrids / midPrice) * 100) / 100,
-      minSize
+      0.03
     );
-    // Ensure min notional at the LOWEST price (worst-case for buy levels).
+    // Ensure min notional at the LOWEST price (worst-case for buy levels):
+    // a 0.03 qty at $1800 = $54 which is well above $20, so this is
+    // usually a no-op, but keep it as defense in depth.
     while (canonicalQty * config.lowerPrice < minNotional) {
       canonicalQty += minSize;
     }
