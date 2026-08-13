@@ -107,15 +107,9 @@ export function computeQtyPerLevel(
   const ORDER_ALLOC = 0.75;
   const effCap = investmentUsdt * leverage * ORDER_ALLOC;
   const { min_size: minSize, min_notional: minNotional } = getInstrumentSpec(pair);
-  // Floor at the instrument's real min_size, NOT a hardcoded 0.03 — same fix
-  // calculateGridLevels() already carries. This path (decideCompound →
-  // checkCompoundRebalance) writes straight into bot.quantity_per_level, so a
-  // 0.03 floor made the FIRST compound jump the order size on low-priced pairs
-  // regardless of the configured size (BNB @ $612: 0.02 → 0.03, +50% notional
-  // in one step). The min_notional loop below still clears the exchange floor.
   let qty = Math.max(
     Math.ceil((effCap / numGrids / midPrice) * 100) / 100,
-    minSize
+    0.03
   );
   // Ensure min notional at lowest likely price
   
@@ -347,22 +341,6 @@ const SAFEGUARD_MAINTENANCE_MARGIN = 0.005;
  */
 export function computeLiqPriceLocal(bot: GridBot): number | null {
   if (!bot.avg_entry_price || bot.avg_entry_price <= 0) return null;
-  // NO derivar acá un "leverage efectivo" a partir de la posición abierta.
-  // Se intentó (notional / (investment_usdt / leverage)) creyendo que solo
-  // hacía el safeguard más conservador, y el efecto medido fue otro: con
-  // inv $12.56 a 6x y entrada en $610, al llenarse el SEGUNDO nivel de compra
-  // (0.04 BNB) la distancia calculada caía de 16.17% a 8.08% y el safeguard
-  // disparaba — con safeguard_action='close', cerrando la posición sola.
-  //
-  // La causa de fondo es que el repo usa `investment_usdt` con dos sentidos
-  // opuestos y no se puede saber cuál vale sin preguntarle al autor:
-  //   grid-engine.ts:108   effCap = investmentUsdt * leverage * ORDER_ALLOC
-  //                        → lo trata como MARGEN aportado
-  //   grid-engine.ts:1456  requiredMargin = investment_usdt / leverage
-  //                        → lo trata como NOCIONAL objetivo
-  // Con la primera lectura el ajuste era casi un no-op; con la segunda
-  // disparaba de inmediato. Se vuelve a la fórmula original hasta que el
-  // autor defina la convención.
   const factor = 1 / bot.leverage - SAFEGUARD_MAINTENANCE_MARGIN;
   if (factor <= 0) return null;
   if (bot.direction === 'long') {
@@ -1709,55 +1687,12 @@ export class GridEngine extends EventEmitter {
             metadata: `dca_${bot.id}_${Date.now()}`,
           }, true);
 
-          // The order is IOC: it fills what it can against the book RIGHT NOW
-          // and cancels the rest, so a thin book means a partial fill or no
-          // fill at all. Crediting `position_size + size` unconditionally (the
-          // previous behavior) drifted the DB away from reality on every such
-          // order, and position_size feeds the liquidation estimate the
-          // safeguard runs on — an inflated size makes the safeguard read a
-          // liquidation price that doesn't exist.
-          //
-          // Read the real position back from GRVT instead of incrementing.
-          // That is both accurate for this fill and self-healing for any drift
-          // an earlier one left behind. Same verify-then-write shape as
-          // executeInitialPurchase(). If the read fails we leave position_size
-          // untouched — a stale value is safer than a fabricated one, and the
-          // monitor's updatePnL() refreshes it from GRVT on the next tick.
-          await new Promise((r) => setTimeout(r, 2000));
-          const updates: Record<string, unknown> = {
-            // Always stamp the attempt so a non-filling order can't turn the
-            // hourly check into a retry loop against the exchange.
+          await db.updateBot(bot.id, {
             last_dca_at: new Date().toISOString(),
-          };
-          let filled: number | null = null;
-          try {
-            const pos = await client.getPosition(bot.pair);
-            const realSize = pos ? Math.abs(parseFloat(pos.size)) : 0;
-            const realEntry = pos ? parseFloat(pos.entry_price) : 0;
-            filled = realSize - bot.position_size;
-            updates.position_size = realSize;
-            if (realEntry > 0) updates.avg_entry_price = realEntry;
-          } catch (posErr) {
-            log.warn(
-              { botId: bot.id, err: (posErr as Error).message },
-              'DCA: could not verify position after buy — leaving position_size as-is'
-            );
-          }
-          await db.updateBot(bot.id, updates as any);
+            position_size: bot.position_size + size,
+          } as any);
 
-          if (filled === null) {
-            log.info({ botId: bot.id, requested: size }, 'DCA buy sent (fill unverified)');
-          } else if (filled <= 0) {
-            log.warn(
-              { botId: bot.id, requested: size, price: aggressivePrice },
-              'DCA buy did NOT fill (IOC found no liquidity at the limit price)'
-            );
-          } else {
-            log.info(
-              { botId: bot.id, requested: size, filled, price: aggressivePrice },
-              filled + 1e-8 < size ? 'DCA buy PARTIALLY filled' : 'DCA buy executed'
-            );
-          }
+          log.info({ botId: bot.id, size, price: aggressivePrice }, 'DCA buy executed');
         } catch (buyErr) {
           log.error({ botId: bot.id, err: (buyErr as Error).message }, 'DCA buy failed');
         }

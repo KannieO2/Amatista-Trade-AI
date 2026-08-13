@@ -24,7 +24,6 @@ import { encryptCredentialFields } from '../auth/crypto.js';
 import { sendPasswordResetEmail, isMailerConfigured } from '../mail/mailer.js';
 import { GRVTClient, type GrvtClientCreds } from '../api/client.js';
 import { invalidateGrvtClient, getGrvtClientForBot } from '../api/grvt-client-factory.js';
-import { computeQtyPerLevel } from '../bot/grid-engine.js';
 
 // Augment Express Request to carry the authenticated user id set
 // by the JWT middleware. Every protected handler reads req.userId.
@@ -1820,23 +1819,22 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     // they disagreed: bot 43 hit it on 2026-04-08 — the wizard said
     // 0.0084 ETH/level but the bot ran with 0.05/0.06, drifting the
     // position by 0.17 ETH on a 6-min run. Single source of truth now.
-    // La versión anterior NO reflejaba al motor pese a lo que dice el comentario
-    // de arriba: reimplementaba el cálculo con constantes de ETH/BTC escritas a
-    // mano (`minSize = pair === 'ETH' ? 0.01 : 0.001`, piso 0.03,
-    // `minNotional = pair === 'ETH' ? 20 : 100`). Todo lo que no fuera ETH se
-    // trataba como BTC. En BNB ese bucle inflaba la cantidad hasta cubrir $100
-    // por nivel y aplastaba el resto del cálculo: devolvía qty 0.17 para 40, 80
-    // y 120 grillas por igual, mientras el motor operaba 0.02. La vista previa
-    // mostraba 8,5x el tamaño real de orden.
-    //
-    // Ahora llama a la MISMA función que usa el motor, que lee min_size y
-    // min_notional reales del par vía getInstrumentSpec(). El espaciado también
-    // pasa a dividir por `grids` como calculateGridLevels(), en vez de
-    // `grids - 1`.
-    const spacing = (upper - lower) / grids;
+    const spacing = (upper - lower) / (grids - 1);
     const notional = investment * leverage;
+    const ORDER_ALLOC = 0.75;
     const midPrice = (upper + lower) / 2;
-    const qtyPerLevel = computeQtyPerLevel(investment, leverage, grids, midPrice, pair);
+    const effCap = investment * leverage * ORDER_ALLOC;
+    const minSize = pair === 'ETH_USDT_Perp' ? 0.01 : 0.001;
+    let qtyPerLevel = Math.max(
+      Math.ceil((effCap / grids / midPrice) * 100) / 100,
+      0.03
+    );
+    // Floor on min notional at the lower price (safety net; usually no-op).
+    const minNotional = pair === 'ETH_USDT_Perp' ? 20 : 100;
+    while (qtyPerLevel * lower < minNotional) {
+      qtyPerLevel += minSize;
+    }
+    qtyPerLevel = Math.round(qtyPerLevel * 100) / 100;
     const profitPerRoundTrip = qtyPerLevel * spacing;
 
     // Estimated liquidation: simplified — actual depends on funding/fees.
