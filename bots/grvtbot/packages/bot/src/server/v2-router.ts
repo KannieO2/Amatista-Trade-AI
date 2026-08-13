@@ -70,8 +70,6 @@ interface EngineOps {
     activeWindowSize?: number;
     // H.5: optional sub-account routing. NULL = use default creds.
     grvtSubAccountId?: number | null;
-    // Per-bot paper/live. true/undefined = paper (seguro), false = live (real).
-    paperMode?: boolean;
   }): Promise<number>;
   startBot(botId: number): Promise<void>;
   pauseBot(botId: number): Promise<void>;
@@ -1108,7 +1106,7 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
              last_compound_at, total_reinvested, original_investment_usdt,
              quantity_per_level,
              safeguard_enabled, safeguard_threshold_pct, safeguard_action,
-             grvt_sub_account_id, paper_mode
+             grvt_sub_account_id
       FROM grid_bots
       WHERE COALESCE(user_id, 1) = ?
       ORDER BY created_at DESC
@@ -1910,7 +1908,6 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
       // H.5: optional sub-account routing. Null/missing = default creds.
       grvt_sub_account_id: number | null;
       // Per-bot paper/live. true/missing = paper (seguro), false = live (real).
-      paper_mode: boolean;
     }>;
 
     const errors: string[] = [];
@@ -2025,10 +2022,8 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         virtualEnabled,
         activeWindowSize: virtualEnabled ? activeWindowSize : undefined,
         grvtSubAccountId,
-        // paper por defecto (seguro): live SOLO si el cliente manda paper_mode:false.
-        paperMode: body.paper_mode !== false,
       });
-      log.info({ botId, userId, pair, direction, leverage, grids, paperMode: body.paper_mode !== false }, 'bot created (paused)');
+      log.info({ botId, userId, pair, direction, leverage, grids }, 'bot created (paused)');
 
       // Persist per-bot risk acceptance if the dashboard sent the
       // exact text + version it showed. The text is hashed and the

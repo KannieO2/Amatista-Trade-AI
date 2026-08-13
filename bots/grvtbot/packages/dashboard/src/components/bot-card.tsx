@@ -87,19 +87,7 @@ export function BotCard({ bot }: BotCardProps) {
               {bot.direction} · {bot.leverage}x
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            {/* Paper/live por bot: paper (default) o real. 1/undefined = paper. */}
-            <span
-              className={`shrink-0 rounded px-2 py-0.5 text-2xs font-semibold uppercase tracking-wide ${
-                bot.paper_mode === 0
-                  ? 'bg-danger/20 text-danger'
-                  : 'bg-bg-elevated text-text-muted'
-              }`}
-            >
-              {bot.paper_mode === 0 ? 'Live' : 'Paper'}
-            </span>
-            <StatusPill status={status} />
-          </div>
+          <StatusPill status={status} />
         </div>
 
         {/* Equity hero */}

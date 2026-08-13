@@ -52,7 +52,6 @@ interface EngineOps {
     investmentUSDT: number;
     virtualEnabled?: boolean;
     activeWindowSize?: number;
-    paperMode?: boolean;
   }): Promise<number>;
   startBot(botId: number): Promise<void>;
   pauseBot(botId: number): Promise<void>;
