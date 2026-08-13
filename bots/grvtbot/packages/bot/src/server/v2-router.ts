@@ -1852,11 +1852,14 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     const overOrderCap = grids > 95 && !virtualEnabledVal;
 
     // calculateGridLevels() genera numGrids+1 niveles (el bucle va de 0 a
-    // numGrids inclusive). Con grillas virtuales solo `active_window_size`
-    // tienen orden viva a la vez; sin ellas, todos.
+    // numGrids inclusive), pero el nivel "gap" —el más cercano al precio— se
+    // deja SIEMPRE sin orden a propósito (placeInitialOrders lo marca filled;
+    // updateBotRange lo saltea). Con grillas virtuales solo los
+    // `active_window_size` niveles más cercanos entran, y el gap es uno de
+    // ellos por ser el más cercano de todos.
     const levelsWithOrders = virtualEnabledVal
-      ? Math.min(activeWindowSizeVal, grids + 1)
-      : grids + 1;
+      ? Math.min(activeWindowSizeVal, grids + 1) - 1
+      : grids;
     const notionalNeeded = qtyPerLevel * midPrice * levelsWithOrders;
     // GRVT rechaza órdenes que superen equity × leverage, así que este es el
     // techo duro. El motor además se limita al 75% (ORDER_ALLOC), o sea que
