@@ -347,21 +347,23 @@ const SAFEGUARD_MAINTENANCE_MARGIN = 0.005;
  */
 export function computeLiqPriceLocal(bot: GridBot): number | null {
   if (!bot.avg_entry_price || bot.avg_entry_price <= 0) return null;
-  // Use the EFFECTIVE leverage (real open notional / margin backing it), not
-  // just the configured bot.leverage. A grid accumulates position as buy levels
-  // fill, so the live exposure can sit well above what the nominal leverage
-  // implies — and the liquidation price moves with the real exposure, not the
-  // configured number. Taking the max of the two keeps this strictly
-  // conservative: identical to the old behavior when the position is within
-  // nominal, and it fires the safeguard EARLIER (never later) when it isn't.
-  // Margin basis matches validateSufficientBalance(): investment / leverage.
-  let effLeverage = bot.leverage;
-  const margin = bot.leverage > 0 ? bot.investment_usdt / bot.leverage : 0;
-  const notional = (bot.position_size ?? 0) * bot.avg_entry_price;
-  if (margin > 0 && notional > 0) {
-    effLeverage = Math.max(bot.leverage, notional / margin);
-  }
-  const factor = 1 / effLeverage - SAFEGUARD_MAINTENANCE_MARGIN;
+  // NO derivar acá un "leverage efectivo" a partir de la posición abierta.
+  // Se intentó (notional / (investment_usdt / leverage)) creyendo que solo
+  // hacía el safeguard más conservador, y el efecto medido fue otro: con
+  // inv $12.56 a 6x y entrada en $610, al llenarse el SEGUNDO nivel de compra
+  // (0.04 BNB) la distancia calculada caía de 16.17% a 8.08% y el safeguard
+  // disparaba — con safeguard_action='close', cerrando la posición sola.
+  //
+  // La causa de fondo es que el repo usa `investment_usdt` con dos sentidos
+  // opuestos y no se puede saber cuál vale sin preguntarle al autor:
+  //   grid-engine.ts:108   effCap = investmentUsdt * leverage * ORDER_ALLOC
+  //                        → lo trata como MARGEN aportado
+  //   grid-engine.ts:1456  requiredMargin = investment_usdt / leverage
+  //                        → lo trata como NOCIONAL objetivo
+  // Con la primera lectura el ajuste era casi un no-op; con la segunda
+  // disparaba de inmediato. Se vuelve a la fórmula original hasta que el
+  // autor defina la convención.
+  const factor = 1 / bot.leverage - SAFEGUARD_MAINTENANCE_MARGIN;
   if (factor <= 0) return null;
   if (bot.direction === 'long') {
     return bot.avg_entry_price * (1 - factor);
