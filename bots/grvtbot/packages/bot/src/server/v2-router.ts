@@ -1851,21 +1851,6 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     // bot can't exceed that. With virtual grids, only M ≤ 80 are active at once.
     const overOrderCap = grids > 95 && !virtualEnabledVal;
 
-    // calculateGridLevels() genera numGrids+1 niveles (el bucle va de 0 a
-    // numGrids inclusive), pero el nivel "gap" —el más cercano al precio— se
-    // deja SIEMPRE sin orden a propósito (placeInitialOrders lo marca filled;
-    // updateBotRange lo saltea). Con grillas virtuales solo los
-    // `active_window_size` niveles más cercanos entran, y el gap es uno de
-    // ellos por ser el más cercano de todos.
-    const levelsWithOrders = virtualEnabledVal
-      ? Math.min(activeWindowSizeVal, grids + 1) - 1
-      : grids;
-    const notionalNeeded = qtyPerLevel * midPrice * levelsWithOrders;
-    // GRVT rechaza órdenes que superen equity × leverage, así que este es el
-    // techo duro. El motor además se limita al 75% (ORDER_ALLOC), o sea que
-    // quedar por debajo de esta línea es necesario pero no suficiente.
-    const overCapacity = notionalNeeded > notional;
-
     res.json({
       valid: true,
       pair,
@@ -1881,15 +1866,20 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
         liquidationEstimate: round(liquidationEstimate, 2),
         liqDistancePct: round(liqDistancePct, 2),
       },
+      // NO agregar acá un aviso de "no te alcanza el margen" comparando
+      // qty * midPrice * niveles contra investment * leverage. Se probó y era
+      // falso: un grid LONG no compromete todos los niveles a la vez. Al
+      // arrancar, executeInitialPurchase() compra SOLO lo que respalda los
+      // niveles SELL que quedan arriba del precio (grid-engine.ts:2452), y las
+      // compras de abajo van sumando exposición a medida que se llenan, no de
+      // entrada. Ese total es el peor caso —precio recorriendo todo el rango
+      // hacia abajo— no el requisito inicial. Verificado contra un bot real en
+      // live que operaba con $8 y 10 grillas, configuración que el aviso
+      // marcaba como imposible. Calcularlo bien exige saber cómo reserva
+      // margen GRVT por orden en reposo, que no se deduce de este repo.
       warnings: [
         ...(overOrderCap ? ['num_grids over GRVT Tier 1 cap (95)'] : []),
         ...(leverage > 20 ? ['leverage > 20x: liquidation risk is high'] : []),
-        ...(overCapacity
-          ? [
-              `this config needs $${notionalNeeded.toFixed(0)} of notional across ${levelsWithOrders} orders ` +
-                `but investment x leverage is only $${notional.toFixed(0)} — orders will be rejected for insufficient margin`,
-            ]
-          : []),
       ],
     });
     return;
