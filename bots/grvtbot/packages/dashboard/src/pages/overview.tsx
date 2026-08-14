@@ -115,6 +115,8 @@ export function OverviewPage() {
   const totalRealized = summary?.totalRealized ?? fallbackRealized;
   const totalUnrealized = summary?.totalUnrealized ?? fallbackUnrealized;
   const totalPositionUsdt = summary?.totalPositionUsdt ?? 0;
+  const marginUsed = summary?.marginUsed ?? null;
+  const availableBalance = summary?.availableBalance ?? null;
   const avgLeverage = summary?.avgLeverage ?? 0;
   const pairExposure = summary?.pairExposure ?? {};
   const runningCount = summary?.runningCount ?? bots.filter((b) => b.status === 'running').length;
@@ -183,11 +185,30 @@ export function OverviewPage() {
         />
       </div>
 
-      {/* Risk strip — H.7 */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-px bg-border-subtle rounded-lg overflow-hidden">
+      {/* Risk strip — H.7.
+          "Margen usado" y "Disponible" salen del balance de GRVT, no de
+          investment_usdt. Son los que dicen cuánta plata está realmente
+          comprometida: el campo de config puede quedar muy por debajo,
+          porque el tamaño de orden se redondea hacia arriba al min_size
+          del par. Si GRVT no responde se muestran como "—" en vez de
+          inventar un número. */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-border-subtle rounded-lg overflow-hidden">
         <StatCard label={t('overview.positionNotional')} value={formatUsdCompact(totalPositionUsdt)} />
-        <StatCard label={t('overview.invested')} value={formatUsdCompact(totalInvested)} />
+        <StatCard
+          label={t('overview.marginUsed')}
+          value={marginUsed !== null ? formatUsdCompact(marginUsed) : '—'}
+        />
+        <StatCard
+          label={t('overview.available')}
+          value={availableBalance !== null ? formatUsdCompact(availableBalance) : '—'}
+        />
         <StatCard label={t('overview.avgLeverage')} value={`${avgLeverage.toFixed(1)}x`} />
+      </div>
+
+      {/* El campo de config, separado y etiquetado como tal para que no se
+          confunda con la plata comprometida. */}
+      <div className="grid grid-cols-1 gap-px bg-border-subtle rounded-lg overflow-hidden">
+        <StatCard label={t('overview.invested')} value={formatUsdCompact(totalInvested)} />
       </div>
 
       {/* Portfolio equity + pair exposure — H.7 */}
