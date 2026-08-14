@@ -60,8 +60,18 @@ export function BotCard({ bot }: BotCardProps) {
   const trendPnl = tick?.trendPnl ?? bot.trend_pnl_usdt;
   const positionSize = tick?.positionSize ?? bot.position_size;
   const avgEntry = tick?.avgEntryPrice ?? bot.avg_entry_price;
-  const equity = bot.investment_usdt + totalPnl;
-  const equityPct = (totalPnl / bot.investment_usdt) * 100;
+  // OJO: esto NO es equity. Es el capital asignado en la config más el PnL,
+  // y el label lo dice así. El equity de verdad es por CUENTA, no por bot —
+  // GRVT usa cross margin, así que no existe un equity atribuible a un bot
+  // solo. El número real de la cuenta está en el Resumen, que lo pide a GRVT.
+  //
+  // La diferencia no es cosmética: el tamaño de orden se redondea hacia
+  // arriba al min_size del par, así que un bot puede desplegar bastante más
+  // que su investment_usdt. Bot 7, 2026-08-14: config $16, nocional real $121.
+  const allocatedPlusPnl = bot.investment_usdt + totalPnl;
+  const allocatedPct = (totalPnl / bot.investment_usdt) * 100;
+  // Nocional real de la posición de ESTE bot — sí es atribuible y sí es real.
+  const notional = Math.abs(positionSize) * avgEntry;
 
   return (
     <Link
@@ -98,9 +108,9 @@ export function BotCard({ bot }: BotCardProps) {
         </div>
         <div className="flex items-baseline gap-3 mb-2">
           <Mono className="text-2xl font-semibold text-text-primary">
-            {formatUsd(equity)}
+            {formatUsd(allocatedPlusPnl)}
           </Mono>
-          <Delta value={equityPct} format={formatPercent} />
+          <Delta value={allocatedPct} format={formatPercent} />
         </div>
 
         {/* Sparkline */}
@@ -122,6 +132,7 @@ export function BotCard({ bot }: BotCardProps) {
           <SummaryRow label={t('bots.cardRealized')} value={formatPnl(gridProfit)} />
           <SummaryRow label={t('bots.cardUnrealized')} value={formatPnl(trendPnl)} />
           <SummaryRow label={t('bots.cardInvestment')} value={formatUsd(bot.investment_usdt)} />
+          <SummaryRow label={t('bots.cardNotional')} value={formatUsd(notional)} />
         </dl>
       </Card>
     </Link>

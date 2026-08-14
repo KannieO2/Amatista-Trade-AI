@@ -194,7 +194,13 @@ export interface PortfolioSummary {
   botCount: number;
   runningCount: number;
   totalInvested: number;
+  // Equity real de GRVT. Si la API no responde cae al calculado
+  // (investment_usdt + PnL) y equityIsLive queda en false.
   totalEquity: number;
+  equityIsLive: boolean;
+  allocatedPlusPnl: number;
+  marginUsed: number | null;
+  availableBalance: number | null;
   totalRealized: number;
   totalUnrealized: number;
   totalPnl: number;
