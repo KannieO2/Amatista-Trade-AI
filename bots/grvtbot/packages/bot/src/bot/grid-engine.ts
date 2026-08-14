@@ -1297,13 +1297,28 @@ export class GridEngine extends EventEmitter {
     const effCap = config.investmentUSDT * config.leverage * ORDER_ALLOC;
     const { min_notional: minNotional, min_size: minSize } = getInstrumentSpec(config.pair);
     
+    // El piso es el min_size REAL del par, no un 0.03 fijo. El 0.03 estaba
+    // dimensionado para ETH — su comentario original decía "a 0.03 qty at
+    // $1800 = $54 which is well above $20", o sea que en ETH nunca actúa. Pero
+    // el piso está en UNIDADES de la moneda, así que en pares más baratos sí
+    // actúa y multiplica el tamaño de orden:
+    //
+    //   0.03 ETH  a $1875 = $56.25   ← para esto se pensó, no molesta
+    //   0.03 BNB  a  $612 = $18.36   ← con capital chico, 5x lo que corresponde
+    //
+    // Medido en cuentas reales: con $29 a 5x el usuario pidió 20 órdenes y
+    // GRVT aceptó 8 — el resto rebotó con "Insufficient margin". Y el bot de
+    // $8 @ 6x terminó operando ~19x de nocional real sin que ninguna pantalla
+    // lo mostrara.
+    //
+    // El mínimo del exchange lo garantiza el bucle de abajo, que sí lee el
+    // min_notional del par. Este piso era una segunda red sobre esa, y en
+    // pares caros es redundante: en BNB, 0.01 x $602 = $6.02 ya supera los $5.
     let canonicalQty = Math.max(
       Math.ceil((effCap / config.numGrids / midPrice) * 100) / 100,
-      0.03
+      minSize
     );
-    // Ensure min notional at the LOWEST price (worst-case for buy levels):
-    // a 0.03 qty at $1800 = $54 which is well above $20, so this is
-    // usually a no-op, but keep it as defense in depth.
+    // Ensure min notional at the LOWEST price (worst-case for buy levels).
     while (canonicalQty * config.lowerPrice < minNotional) {
       canonicalQty += minSize;
     }
