@@ -22,7 +22,7 @@ import { hashPassword, verifyPassword } from '../auth/passwords.js';
 import { signToken, verifyToken } from '../auth/jwt.js';
 import { encryptCredentialFields } from '../auth/crypto.js';
 import { sendPasswordResetEmail, isMailerConfigured } from '../mail/mailer.js';
-import { GRVTClient, getInstrumentSpec, type GrvtClientCreds } from '../api/client.js';
+import { GRVTClient, type GrvtClientCreds } from '../api/client.js';
 import { invalidateGrvtClient, getGrvtClientForBot } from '../api/grvt-client-factory.js';
 
 // Augment Express Request to carry the authenticated user id set
@@ -1817,32 +1817,18 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     // they disagreed: bot 43 hit it on 2026-04-08 — the wizard said
     // 0.0084 ETH/level but the bot ran with 0.05/0.06, drifting the
     // position by 0.17 ETH on a 6-min run. Single source of truth now.
-    //
-    // Este bloque se había desincronizado del motor otra vez. Diferencias que
-    // tenía y que hacían mentir al preview (medido con el bot 8 el 2026-08-14:
-    // el wizard decía 0.17 BNB/nivel = $103 por orden, el motor guardó 0.01 =
-    // $6.07, y las 7 órdenes entraron sin rebotar):
-    //
-    //   spacing:     usaba /(grids-1); calculateGridLevels usa /numGrids
-    //   piso de qty: usaba 0.03 fijo; el motor usa el min_size real del par
-    //   min_notional/min_size: constantes por ternario ETH/no-ETH, en vez
-    //                          del spec del instrumento
-    //
-    // El 0.03 y el minNotional 100 estaban dimensionados para ETH. En pares
-    // baratos inflan el preview: 0.03 BNB a $607 = $18.21, y el bucle de
-    // min_notional lo empujaba hasta 0.17 para llegar a $100 — un umbral que
-    // BNB no tiene (su min_notional real es $5).
-    const spacing = (upper - lower) / grids;
+    const spacing = (upper - lower) / (grids - 1);
     const notional = investment * leverage;
     const ORDER_ALLOC = 0.75;
     const midPrice = (upper + lower) / 2;
     const effCap = investment * leverage * ORDER_ALLOC;
-    const { min_notional: minNotional, min_size: minSize } = getInstrumentSpec(pair);
+    const minSize = pair === 'ETH_USDT_Perp' ? 0.01 : 0.001;
     let qtyPerLevel = Math.max(
       Math.ceil((effCap / grids / midPrice) * 100) / 100,
-      minSize
+      0.03
     );
     // Floor on min notional at the lower price (safety net; usually no-op).
+    const minNotional = pair === 'ETH_USDT_Perp' ? 20 : 100;
     while (qtyPerLevel * lower < minNotional) {
       qtyPerLevel += minSize;
     }
