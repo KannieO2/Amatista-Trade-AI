@@ -23,7 +23,7 @@ import { signToken, verifyToken } from '../auth/jwt.js';
 import { encryptCredentialFields } from '../auth/crypto.js';
 import { sendPasswordResetEmail, isMailerConfigured } from '../mail/mailer.js';
 import { GRVTClient, getInstrumentSpec, type GrvtClientCreds } from '../api/client.js';
-import { invalidateGrvtClient, getGrvtClientForBot, getGrvtClientForUser } from '../api/grvt-client-factory.js';
+import { invalidateGrvtClient, getGrvtClientForBot } from '../api/grvt-client-factory.js';
 
 // Augment Express Request to carry the authenticated user id set
 // by the JWT middleware. Every protected handler reads req.userId.
@@ -2523,47 +2523,11 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
 
     const avgLeverage = totalInvested > 0 ? weightedLeverage / totalInvested : 0;
 
-    // El equity REAL sale de GRVT, no de sumar investment_usdt + PnL.
-    //
-    // Ese cálculo de arriba (`investment_usdt + botPnl`) no es equity: es
-    // "capital asignado + PnL". Los dos números divergen porque el tamaño de
-    // orden se redondea hacia arriba a 2 decimales, así que un bot puede
-    // desplegar bastante más de lo que dice su config. Medido en el bot 7 el
-    // 2026-08-14: investment_usdt $16, pero GRVT reportaba $23.07 de
-    // initial_margin sobre $121 de nocional — porque el qty presupuestado era
-    // 0.0049 BNB/orden y el mínimo del par es 0.01, o sea el doble.
-    //
-    // La pantalla mostraba $15.98 ("$16 − $0.02 de PnL") mientras la cuenta
-    // tenía $30.39. Ahora se pide el balance de verdad y el valor calculado
-    // queda solo como respaldo si GRVT no responde, marcado con equityIsLive.
-    let realEquity: number | null = null;
-    let marginUsed: number | null = null;
-    let availableBalance: number | null = null;
-    try {
-      const client = await getGrvtClientForUser(userId, db as any);
-      const balance = await client.getBalance();
-      const eq = parseFloat(balance.total_equity);
-      if (Number.isFinite(eq)) {
-        realEquity = eq;
-        marginUsed = parseFloat(balance.initial_margin ?? '0');
-        availableBalance = parseFloat(balance.available_balance ?? '0');
-      }
-    } catch (balErr) {
-      log.warn(
-        { userId, err: (balErr as Error).message },
-        'portfolio-summary: GRVT balance unavailable, falling back to computed equity'
-      );
-    }
-
     res.json({
       botCount: bots.length,
       runningCount: bots.filter(b => b.status === 'running').length,
       totalInvested: round(totalInvested, 2),
-      totalEquity: round(realEquity ?? totalEquity, 2),
-      equityIsLive: realEquity !== null,
-      allocatedPlusPnl: round(totalEquity, 2),
-      marginUsed: marginUsed !== null ? round(marginUsed, 2) : null,
-      availableBalance: availableBalance !== null ? round(availableBalance, 2) : null,
+      totalEquity: round(totalEquity, 2),
       totalRealized: round(totalRealized, 2),
       totalUnrealized: round(totalUnrealized, 2),
       totalPnl: round(totalRealized + totalUnrealized, 2),
