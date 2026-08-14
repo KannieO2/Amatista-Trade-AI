@@ -22,7 +22,7 @@ import { hashPassword, verifyPassword } from '../auth/passwords.js';
 import { signToken, verifyToken } from '../auth/jwt.js';
 import { encryptCredentialFields } from '../auth/crypto.js';
 import { sendPasswordResetEmail, isMailerConfigured } from '../mail/mailer.js';
-import { GRVTClient, type GrvtClientCreds } from '../api/client.js';
+import { GRVTClient, getInstrumentSpec, type GrvtClientCreds } from '../api/client.js';
 import { invalidateGrvtClient, getGrvtClientForBot } from '../api/grvt-client-factory.js';
 
 // Augment Express Request to carry the authenticated user id set
@@ -1817,18 +1817,38 @@ Al hacer click en "Leí y acepto los términos de arriba" y crear una cuenta, co
     // they disagreed: bot 43 hit it on 2026-04-08 — the wizard said
     // 0.0084 ETH/level but the bot ran with 0.05/0.06, drifting the
     // position by 0.17 ETH on a 6-min run. Single source of truth now.
-    const spacing = (upper - lower) / (grids - 1);
+    //
+    // Este bloque se volvió a desincronizar del motor. 7bcf184 arregló el
+    // piso de qty pero solo tocó grid-engine.ts y su test — el preview quedó
+    // con las constantes viejas. Diferencias que tenía:
+    //
+    //   spacing:     usaba /(grids-1); calculateGridLevels usa /numGrids
+    //   piso de qty: 0.03 fijo, en vez del min_size real del par
+    //   umbrales:    min_size y min_notional por ternario ETH/no-ETH, en
+    //                vez del spec del instrumento
+    //
+    // Las dos constantes estaban dimensionadas para ETH. Valores reales que
+    // devuelve GRVT: BNB min_size 0.01 / min_notional $5; ETH 0.001 / $20.
+    // El $100 de "todo lo que no sea ETH" no existe en ningún par, y es el
+    // que hacía el daño: forzaba al bucle a inflar el qty persiguiendo un
+    // mínimo inventado.
+    //
+    // Medido con la config del bot 8 (BNB, $600-614, 7 grillas, $11, 5x):
+    // el preview reportaba 0.17 BNB/nivel = $103.19 por orden, sobre una
+    // cuenta de $12.60. El motor calculó 0.01 = $6.07 y las 7 órdenes
+    // entraron sin rebotar. Un usuario que leyera el preview habría creído
+    // que no le alcanzaba el capital.
+    const spacing = (upper - lower) / grids;
     const notional = investment * leverage;
     const ORDER_ALLOC = 0.75;
     const midPrice = (upper + lower) / 2;
     const effCap = investment * leverage * ORDER_ALLOC;
-    const minSize = pair === 'ETH_USDT_Perp' ? 0.01 : 0.001;
+    const { min_notional: minNotional, min_size: minSize } = getInstrumentSpec(pair);
     let qtyPerLevel = Math.max(
       Math.ceil((effCap / grids / midPrice) * 100) / 100,
-      0.03
+      minSize
     );
     // Floor on min notional at the lower price (safety net; usually no-op).
-    const minNotional = pair === 'ETH_USDT_Perp' ? 20 : 100;
     while (qtyPerLevel * lower < minNotional) {
       qtyPerLevel += minSize;
     }
