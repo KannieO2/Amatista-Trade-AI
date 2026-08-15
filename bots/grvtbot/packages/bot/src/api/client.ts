@@ -566,24 +566,81 @@ export class GRVTClient {
   }
 
   /**
-   * Establecer leverage para un instrumento
+   * Leer el leverage que GRVT tiene configurado por instrumento.
+   *
+   * Devuelve { instrument, leverage, min_leverage, max_leverage,
+   * margin_type }. Ojo: la clave de la respuesta es `results`, en plural.
+   */
+  async getInitialLeverage(instrument?: string): Promise<Array<{
+    instrument: string;
+    leverage: string;
+    min_leverage: string;
+    max_leverage: string;
+    margin_type: string;
+  }>> {
+    await rateLimiter.waitIfNeeded();
+    try {
+      const data = await this.authedRequest(`${TRADING_URL}/get_all_initial_leverage`, {
+        sub_account_id: this.tradingAccountId
+      });
+      const all = data?.results ?? [];
+      return instrument ? all.filter((x: any) => x.instrument === instrument) : all;
+    } catch (error) {
+      console.error('Error leyendo leverage:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Verificar que el leverage real de GRVT coincida con el que pide el bot.
+   *
+   * NO establece nada: GRVT deshabilitó esa capacidad. Los dos endpoints
+   * que existían responden así (probado contra la cuenta real, 2026-08-14):
+   *
+   *   set_leverage          HTTP 404: 404 page not found
+   *   set_initial_leverage  HTTP 400 {"code":2106,"message":"This API has
+   *                         been deprecated and can no longer be used to
+   *                         set leverage"}
+   *
+   * O sea que el apalancamiento SOLO se cambia a mano en grvt.io. El
+   * campo `leverage` del bot sirve únicamente para dimensionar las órdenes
+   * (`investment × leverage × ORDER_ALLOC`); el margen que aplica de verdad
+   * es el de la cuenta.
+   *
+   * Antes esto pegaba al endpoint 404, el catch se tragaba el error y la
+   * función devolvía false sin que nadie mirara el retorno. El bot arrancaba
+   * con un leverage distinto al configurado y ninguna pantalla lo decía.
+   * Medido: el bot 8 pedía 5x con la cuenta de Jesús en 10x — la mitad del
+   * margen esperado y la liquidación más cerca de lo que el bot calculaba.
+   *
+   * Ahora lee el valor real y deja el desajuste en el log. Se mantiene el
+   * nombre `setLeverage` para no tocar al llamador en grid-engine.ts.
    */
   async setLeverage(instrument: string, leverage: number): Promise<boolean> {
-    await rateLimiter.waitIfNeeded();
-    
-    console.log(`⚡ Estableciendo leverage ${leverage}x para ${instrument}`);
-    
-    try {
-      await this.authedRequest(`${TRADING_URL}/set_leverage`, {
-        sub_account_id: this.tradingAccountId,
-        instrument: instrument,
-        leverage: leverage.toString()
-      });
-      return true;
-    } catch (error) {
-      console.error(`Error estableciendo leverage:`, error);
+    const rows = await this.getInitialLeverage(instrument);
+    const row = rows[0];
+
+    if (!row) {
+      console.warn(
+        `⚠️ No pude leer el leverage de ${instrument} en GRVT. ` +
+        `El bot dimensiona con ${leverage}x pero no puedo confirmar el real.`
+      );
       return false;
     }
+
+    const real = parseFloat(row.leverage);
+    if (Number.isFinite(real) && Math.abs(real - leverage) < 0.01) {
+      console.log(`✅ Leverage ${instrument}: ${real}x en GRVT, igual al del bot`);
+      return true;
+    }
+
+    console.warn(
+      `⚠️ LEVERAGE DESALINEADO en ${instrument}: GRVT tiene ${row.leverage}x ` +
+      `(${row.margin_type}) y el bot dimensiona con ${leverage}x. ` +
+      `GRVT ya no permite cambiarlo por API — hay que ajustarlo en grvt.io. ` +
+      `Rango admitido: ${row.min_leverage}x a ${row.max_leverage}x.`
+    );
+    return false;
   }
 
   /**
