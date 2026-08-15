@@ -82,6 +82,42 @@ ICEBERG_DEPTH_PCT = float(os.getenv("PUMP_ICEBERG_DEPTH_PCT", "2.0"))
 ICEBERG_SLICES = max(1, int(os.getenv("PUMP_ICEBERG_SLICES", "3")))
 
 
+# --- Tope de costo de entrada -----------------------------------------------
+# Medido sobre los 704 trades cerrados (2026-08-15): el costo de ENTRADA es lo
+# que mejor separa ganadores de perdedores, mejor que score, régimen o setup.
+#
+#   costo <=0.1%     181 trades   -$192   22.7% aciertos   PF 0.380
+#   costo 0.1-0.3%    13 trades     +$6   46.2% aciertos   PF 1.856
+#   costo 0.3-0.6%    82 trades   -$125   17.1% aciertos   PF 0.271
+#   costo 0.6-1.0%   354 trades   -$660    2.3% aciertos   PF 0.056
+#   costo >1.0%       74 trades   -$195    2.7% aciertos   PF 0.061
+#
+# 428 trades (61%) entraron pagando >0.6% y perdieron $855 con 2.4% de aciertos.
+# La MFE mediana de los perdedores es 0.00%: el precio nunca subió, así que ese
+# costo no se recupera nunca. Cortar en 0.3% deja la pérdida histórica en -$186
+# en vez de -$1165.
+#
+# OJO: esto NO vuelve rentable al bot — el mejor subconjunto sigue en PF 0.616.
+# Es reducción de daño mientras la señal de entrada se arregla, que es el
+# problema de fondo (ni las entradas más limpias tienen edge).
+MAX_ENTRY_COST_PCT = float(os.getenv("PUMP_MAX_ENTRY_COST_PCT", "0.3"))
+
+
+def estimated_entry_cost_pct(notional_usd: float, book_depth_usd: float | None,
+                             slices: int = 1, maker: bool = False) -> float:
+    """Costo estimado de cruzar el spread en una COMPRA, en %.
+
+    Mismo modelo que PaperBroker.place: slippage base (maker o taker, dividido
+    por sqrt(slices) si hay iceberg) + impacto de libro + fee del lado. Se
+    calcula ANTES de mandar la orden para poder rechazarla, y por eso vale
+    también en live: es una estimación previa, no una lectura del fill.
+    """
+    base = MAKER_SLIP_PCT if maker else SLIPPAGE_PCT
+    fee = MAKER_FEE_PCT if maker else FEE_PCT
+    base_slip = base / (slices ** 0.5) if slices > 1 else base
+    return base_slip + market_impact_pct(notional_usd, book_depth_usd) + fee
+
+
 def _iceberg_slices(notional_usd: float, book_depth_usd: float | None) -> int:
     """N órdenes en que partir la entrada. 1 = sin iceberg."""
     if not book_depth_usd or book_depth_usd <= 0 or ICEBERG_SLICES <= 1:
@@ -333,6 +369,16 @@ class ExecutionEngine:
                 take_profit=round(tp, 8),
             )
             slices = _iceberg_slices(per_leg, book_depth_usd)
+            # Gate de costo de entrada: si cruzar el spread cuesta más que el
+            # tope, no se entra. Solo aplica a COMPRAS — una venta es una salida
+            # y bloquearla dejaría la posición atrapada.
+            if side == Side.buy and MAX_ENTRY_COST_PCT > 0:
+                cost = estimated_entry_cost_pct(per_leg, book_depth_usd, slices, entry_maker)
+                if cost > MAX_ENTRY_COST_PCT:
+                    result.rejected.append(
+                        f"{exchange}: entrada cara ({cost:.2f}% > {MAX_ENTRY_COST_PCT:.2f}%)"
+                    )
+                    continue
             try:
                 fill = (await self.live.place(leg, slices) if mode == ExecMode.live
                         else self.paper.place(leg, slices, book_depth_usd=book_depth_usd,
