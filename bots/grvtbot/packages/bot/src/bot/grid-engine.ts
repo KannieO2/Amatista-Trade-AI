@@ -3469,12 +3469,24 @@ export class GridBotInstance {
 
       const totalPnl = this.bot.grid_profit_usdt + trendPnl;
 
+      // liquidation_price solo se escribia al CREAR el bot (linea ~719), y ahi
+      // todavia no hay posicion — quedaba en 0 para siempre y la tarjeta
+      // "Liquidación" del dashboard mostraba "—". Se refresca en cada tick con
+      // el valor que reporta GRVT, que es display-only: la decision de pausar
+      // por cercania a liquidacion la toma computeLiqPriceLocal(), que no se
+      // toca.
+      const liqRaw = position?.est_liquidation_price ?? position?.liquidation_price;
+      const liq = liqRaw != null ? parseFloat(liqRaw) : NaN;
+
       await db.updateBot(this.bot.id, {
         grid_profit_usdt: this.bot.grid_profit_usdt,
         trend_pnl_usdt: trendPnl,
         total_pnl_usdt: totalPnl,
         position_size: positionSize,
-        avg_entry_price: avgEntryPrice
+        avg_entry_price: avgEntryPrice,
+        // sin posicion abierta GRVT no reporta liquidacion: se guarda 0 y el
+        // dashboard muestra "—", que es correcto (no hay nada que liquidar)
+        liquidation_price: Number.isFinite(liq) && liq > 0 ? liq : 0
       });
 
       // H.3: Stop-loss / take-profit check (after PnL is persisted).

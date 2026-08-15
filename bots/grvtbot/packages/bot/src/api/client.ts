@@ -38,11 +38,18 @@ export interface Position {
   entry_price: string;
   mark_price: string;
   unrealized_pnl: string;
-  side: 'buy' | 'sell';
+  // GRVT NO manda `side` en /positions — el signo de `size` es lo que dice
+  // la dirección (positivo = long). Declararlo obligatorio hacía que
+  // `position.side === 'buy'` compilara y en runtime fuera siempre false,
+  // o sea que un long se calculaba con la fórmula de short.
+  side?: 'buy' | 'sell';
   leverage: string;
-  liquidation_price: string;
-  margin_used: string;
-  funding_payment: string;
+  // El campo real de GRVT es `est_liquidation_price`. `liquidation_price`
+  // nunca llega — quedaba undefined y el precio de liquidación en 0.
+  est_liquidation_price?: string;
+  liquidation_price?: string;
+  margin_used?: string;
+  funding_payment?: string;
 }
 
 export interface Order {
@@ -795,18 +802,32 @@ export class GRVTClient {
       const position = await this.getPosition(instrument);
       if (!position) return '0';
 
+      // 1) GRVT ya lo calcula: `est_liquidation_price`. Es el numero bueno —
+      //    contempla el margen cruzado de TODA la cuenta, no solo esta
+      //    posicion. Comprobado contra la cuenta real el 2026-08-14: GRVT
+      //    daba 379.40 y el calculo independiente sobre el equity completo
+      //    daba 379.40. La aproximacion de abajo no puede igualar eso porque
+      //    solo ve el entry y el leverage.
+      const est = parseFloat(position.est_liquidation_price ?? position.liquidation_price ?? '');
+      if (Number.isFinite(est) && est > 0) return est.toFixed(2);
+
+      // 2) Fallback local. Ojo con la direccion: GRVT no manda `side`, asi
+      //    que se lee del SIGNO de `size` (positivo = long). Antes se
+      //    comparaba con position.side, que es undefined -> siempre entraba
+      //    por la rama de short y un long recibia la liquidacion calculada
+      //    hacia ARRIBA del entry.
       const entryPrice = parseFloat(position.entry_price);
+      const size = parseFloat(position.size);
+      if (!Number.isFinite(entryPrice) || entryPrice <= 0) return '0';
+
       const maintenanceMarginRate = 0.005; // 0.5% típico
-      
       // Aproximación: liq_price = entry_price * (1 ± (1/leverage - maintenance_margin))
       const factor = 1 / leverage - maintenanceMarginRate;
-      
-      let liquidationPrice: number;
-      if (position.side === 'buy') {
-        liquidationPrice = entryPrice * (1 - factor);
-      } else {
-        liquidationPrice = entryPrice * (1 + factor);
-      }
+
+      const isLong = Number.isFinite(size) ? size >= 0 : true;
+      const liquidationPrice = isLong
+        ? entryPrice * (1 - factor)
+        : entryPrice * (1 + factor);
 
       return Math.max(0, liquidationPrice).toFixed(2);
 
