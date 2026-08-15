@@ -174,29 +174,85 @@ DASHBOARD_HTML = r"""<!doctype html>
   /* ---- mobile / phone (matches the responsive grid bot) ---- */
   @media(max-width:860px){
     .app{grid-template-columns:1fr}
-    /* sidebar becomes a sticky horizontal nav strip */
-    .sidebar{flex-direction:row;align-items:center;gap:8px;padding:8px 10px;border-right:0;border-bottom:1px solid var(--border-soft);overflow-x:auto;position:sticky;top:0;z-index:30;-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px)}
-    .sidebar .navlabel{display:none}
-    .sidebar .brand{flex:0 0 auto;margin:0}
-    /* .nav es un <nav> sin regla base, o sea display:block — el
-       flex-direction:row de abajo no hacía NADA y los items se apilaban
-       vertical. Medido a 414px: .nav 244x192, .sidebar 209 de alto y el
-       topbar otros 138 = 347px (39% de la pantalla) de cromo antes del
-       primer dato. El display:flex es lo que lo vuelve una tira. */
-    .nav{display:flex;align-items:center;flex-direction:row;gap:4px;flex:1;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
-    .nav::-webkit-scrollbar{display:none}
-    .nav a{white-space:nowrap;padding:8px 11px;font-size:12px;flex:0 0 auto}
-    /* el badge usa margin-left:auto (pensado para la columna): en fila
-       empuja el texto y descuadra la pastilla */
-    .nav a .badge{margin-left:6px}
-    .topbar{flex-wrap:nowrap;gap:8px;padding:8px 12px}
+    /* NAVEGACION EN BARRA INFERIOR, igual que el grid.
+       Antes el sidebar era una tira arriba con scroll horizontal: los items
+       de la derecha quedaban cortados contra el borde y no habia forma de
+       saber que existian. Una tab bar fija abajo muestra las 6 secciones a
+       la vez, queda al alcance del pulgar y es el patron que el usuario ya
+       tiene en el grid. */
+    .sidebar{
+      position:fixed;bottom:0;left:0;right:0;z-index:40;
+      flex-direction:row;align-items:stretch;gap:0;padding:0;
+      border-right:0;border-top:1px solid var(--border-soft);
+      background:rgba(10,13,20,.92);
+      -webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);
+      padding-bottom:env(safe-area-inset-bottom);
+    }
+    /* la marca y el label de seccion no van en una tab bar */
+    .sidebar .navlabel,.sidebar .brand{display:none}
+    .nav{display:flex;align-items:stretch;flex-direction:row;gap:0;flex:1;overflow:visible}
+    /* icono arriba, texto abajo, todos del mismo ancho. 54px de alto cumple
+       el minimo de 44pt de area tactil de iOS. */
+    .nav a{
+      flex:1 1 0;min-width:0;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;gap:3px;
+      height:54px;padding:0 2px;border-radius:0;
+      font-size:9.5px;letter-spacing:.01em;line-height:1;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    }
+    .nav a svg{width:19px;height:19px;opacity:.85}
+    .nav a.active{background:none;color:var(--pink)}
+    .nav a.active svg{opacity:1}
+    /* el badge (P6 / FSM) no cabe en una tab: se vuelve un punto */
+    .nav a .badge{
+      position:absolute;margin:0;top:8px;left:50%;transform:translateX(7px);
+      width:5px;height:5px;padding:0;border-radius:50%;
+      background:var(--pink);color:transparent;overflow:hidden;
+    }
+    .nav a{position:relative}
+    /* el contenido no puede quedar debajo de la barra */
+    .main{padding-bottom:calc(54px + env(safe-area-inset-bottom))}
+
+    /* SAFE AREAS. Con viewport-fit=cover + status-bar black-translucent, en
+       modo app instalada el contenido arranca DEBAJO del reloj y la señal —
+       el titulo quedaba tapado por la barra de estado.
+       max(...) en vez de solo env(): en telefonos sin notch env() vale 0 y
+       sin el max el padding desaparecia. Asi sirve para todos:
+         iPhone con Dynamic Island  inset-top ~59px
+         iPhone con notch           inset-top ~47px
+         iPhone SE / Android plano  inset-top   0px -> cae al minimo
+       El topbar es el primer elemento de .main en los DOS modos (pump y
+       grid), asi que alcanza con empujarlo a el. */
+    .topbar{
+      flex-wrap:nowrap;gap:8px;
+      padding:max(8px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) 8px max(12px,env(safe-area-inset-left));
+    }
     .search{display:none}
     /* scroll horizontal en vez de wrap: 8 pastillas no entran en 414px y
        envolvían en 3 filas */
     .tb-actions{flex-wrap:nowrap;gap:6px;margin-left:auto;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
     .tb-actions::-webkit-scrollbar{display:none}
     .tb-actions .pill{flex:0 0 auto}
-    .view{padding:12px}
+    /* el switch Pump/Grid no debe partirse en dos lineas */
+    .modeswitch button{white-space:nowrap}
+
+    /* BUG DEL SWITCH EN VISTA GRID: el topbar flotaba con left:212px, que es
+       el ancho del sidebar de ESCRITORIO del iframe. En movil ese sidebar no
+       existe (el grid usa su propia barra inferior), asi que el topbar se iba
+       al borde derecho y pisaba el titulo. En movil vuelve al flujo normal. */
+    .app.grid-mode .topbar{position:static;left:auto;right:auto}
+    .app.grid-mode #view-grvt{position:relative;inset:auto;flex:1}
+    /* el grid trae su propia tab bar dentro del iframe: escondemos la nuestra
+       para no apilar dos barras */
+    .app.grid-mode .sidebar{display:none}
+    /* env() DENTRO de un iframe vale 0 — el iframe no conoce el notch del
+       telefono. Asi que la franja del indicador de inicio se la reservamos
+       desde afuera, encogiendo el contenedor; si no, la tab bar del grid
+       queda pegada al borde y el gesto de home la tapa. */
+    .app.grid-mode .main{padding-bottom:0}
+    .app.grid-mode #view-grvt{padding-bottom:env(safe-area-inset-bottom);background:var(--bg)}
+    /* insets laterales para el notch en horizontal */
+    .view{padding:12px max(12px,env(safe-area-inset-right)) 12px max(12px,env(safe-area-inset-left))}
     .grid-kpi{grid-template-columns:1fr 1fr;gap:10px}
     .vhead{flex-direction:column;align-items:flex-start;gap:6px}
     .vhead h1{font-size:18px}
@@ -210,7 +266,9 @@ DASHBOARD_HTML = r"""<!doctype html>
        quedan de 340px de ancho para mostrar un numero. Dos entran bien. */
     .grid-kpi{grid-template-columns:repeat(2,1fr);gap:8px}
     .sidebar .brand b+span,.sidebar .brand span{display:none}
-    .sidebar{padding:6px 8px}
+    /* OJO: no poner padding a secas aca — pisaria el
+       padding-bottom:env(safe-area-inset-bottom) del bloque de 860px y la
+       barra de gestos del iPhone quedaria encima de las tabs. */
     .nav a svg{width:14px;height:14px}
     .nav a .badge{display:none}
     .pill{padding:6px 9px;font-size:11px}
@@ -218,8 +276,11 @@ DASHBOARD_HTML = r"""<!doctype html>
     .modeswitch button svg{display:none}
     .vhead h1{font-size:17px}
     .card{padding:12px;border-radius:12px}
-    /* respeta el notch y la barra de gestos del iPhone */
-    .view{padding:10px;padding-left:max(10px,env(safe-area-inset-left));padding-right:max(10px,env(safe-area-inset-right));padding-bottom:max(10px,env(safe-area-inset-bottom))}
+    /* el hueco de la barra inferior lo pone .main, aca solo los laterales */
+    .view{padding:10px max(10px,env(safe-area-inset-right)) 10px max(10px,env(safe-area-inset-left))}
+    /* 6 tabs en 375px = 62px cada una: el texto tiene que achicarse */
+    .nav a{font-size:9px;gap:2px}
+    .nav a svg{width:18px;height:18px}
   }
   body{overflow-x:hidden}
   /* wide tables scroll inside their panel instead of breaking the page */
