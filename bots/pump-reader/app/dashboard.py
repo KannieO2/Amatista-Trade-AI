@@ -236,21 +236,9 @@ DASHBOARD_HTML = r"""<!doctype html>
     /* el switch Pump/Grid no debe partirse en dos lineas */
     .modeswitch button{white-space:nowrap}
 
-    /* BUG DEL SWITCH EN VISTA GRID: el topbar flotaba con left:212px, que es
-       el ancho del sidebar de ESCRITORIO del iframe. En movil ese sidebar no
-       existe (el grid usa su propia barra inferior), asi que el topbar se iba
-       al borde derecho y pisaba el titulo. En movil vuelve al flujo normal. */
-    .app.grid-mode .topbar{position:static;left:auto;right:auto}
-    .app.grid-mode #view-grvt{position:relative;inset:auto;flex:1}
-    /* el grid trae su propia tab bar dentro del iframe: escondemos la nuestra
-       para no apilar dos barras */
-    .app.grid-mode .sidebar{display:none}
-    /* env() DENTRO de un iframe vale 0 — el iframe no conoce el notch del
-       telefono. Asi que la franja del indicador de inicio se la reservamos
-       desde afuera, encogiendo el contenedor; si no, la tab bar del grid
-       queda pegada al borde y el gesto de home la tapa. */
-    .app.grid-mode .main{padding-bottom:0}
-    .app.grid-mode #view-grvt{padding-bottom:env(safe-area-inset-bottom);background:var(--bg)}
+    /* Las correcciones de vista grid viven en el bloque @media del FINAL de
+       la hoja: aca perdian contra las reglas .app.grid-mode de escritorio,
+       que aparecen despues en el archivo. */
     /* insets laterales para el notch en horizontal */
     .view{padding:12px max(12px,env(safe-area-inset-right)) 12px max(12px,env(safe-area-inset-left))}
     .grid-kpi{grid-template-columns:1fr 1fr;gap:10px}
@@ -527,6 +515,43 @@ DASHBOARD_HTML = r"""<!doctype html>
   .app.grid-mode .topbar{position:absolute;top:0;left:212px;right:0;z-index:30}
   .app.grid-mode #view-grvt{position:absolute;inset:0;z-index:10;display:flex;flex-direction:column;animation:gridFade .3s cubic-bezier(.16,1,.3,1) both}
   .app.grid-mode .topbar{transition:left .3s cubic-bezier(.16,1,.3,1)}
+
+  /* ============ MOVIL: correcciones que DEBEN ir al final ============
+     Las reglas .app.grid-mode de arriba tienen la misma especificidad que
+     las del media query de 860px, asi que ganaba la que aparece despues en
+     el archivo — o sea las de escritorio. Por eso el topbar seguia flotando
+     con left:212px en el telefono y pisaba el boton "New bot". Este bloque
+     va ultimo a proposito. */
+  @media(max-width:860px){
+    /* El topbar es lo que cubre la barra de estado (lleva el
+       padding-top del safe-area). Si hace scroll, el contenido se mete
+       debajo del reloj — se veia el titulo "Candidatos" partido por la
+       hora. Pegajoso arriba = la franja del notch siempre tapada. */
+    .topbar{position:sticky;top:0;z-index:35;
+      background:rgba(10,13,20,.94);
+      -webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px)}
+
+    /* VISTA GRID: el switch vuelve al flujo en vez de flotar sobre el
+       contenido del iframe. */
+    .app.grid-mode .main{position:static}
+    .app.grid-mode .topbar{position:sticky;top:0;left:auto;right:auto;transition:none}
+    .app.grid-mode #view-grvt{position:relative;inset:auto;flex:1;min-height:0;padding-bottom:0}
+    /* el grid trae su propia tab bar dentro del iframe: escondemos la
+       nuestra para no apilar dos barras */
+    .app.grid-mode .sidebar{display:none}
+    .app.grid-mode .main{padding-bottom:0}
+
+    /* TABLAS: table-layout:fixed reparte el ancho entre ~10 columnas, o sea
+       37px cada una en un telefono — todo quedaba en "6…" y "CONF". En
+       movil se deja crecer y que scrollee dentro del panel, que ya tiene
+       overflow-x:auto. */
+    table.fitbl{table-layout:auto;min-width:max-content;width:auto}
+    .fitbl th,.fitbl td{padding-left:9px;padding-right:9px}
+    /* la primera columna se queda fija para no perder de vista el token */
+    .fitbl td:nth-child(3),.fitbl th:nth-child(3){position:sticky;left:0;z-index:2;
+      background:var(--panel);box-shadow:1px 0 0 var(--border-soft)}
+    .panel{-webkit-overflow-scrolling:touch}
+  }
 </style>
 </head>
 <body>
@@ -2211,9 +2236,38 @@ function postGridTheme(){
   const t=document.documentElement.getAttribute("data-theme")==="light"?"light":"dark";
   if(fr&&fr.contentWindow){ try{ fr.contentWindow.postMessage({tradeosTheme:t},"*"); }catch(e){} }
 }
+// env(safe-area-inset-*) vale 0 DENTRO de un iframe: el documento embebido no
+// conoce el notch del telefono. Medimos el inset real aca (en el padre) y se lo
+// empujamos como px concretos. Sin esto la tab bar del grid queda pegada al
+// borde y el gesto de home la tapa; y si en cambio encogiamos el iframe desde
+// afuera quedaba una franja muerta debajo de la barra.
+function pushSafeArea(){
+  const fr=document.getElementById("grvt-frame");
+  if(!fr) return;
+  let d; try{ d=fr.contentDocument; }catch(e){ return; }   // cross-origin: nada que hacer
+  if(!d||!d.head) return;
+  const probe=document.createElement("div");
+  probe.style.cssText="position:fixed;bottom:0;left:0;width:1px;height:env(safe-area-inset-bottom);visibility:hidden;pointer-events:none";
+  document.body.appendChild(probe);
+  const px=Math.round(probe.getBoundingClientRect().height);
+  probe.remove();
+  let st=d.getElementById("tos-safe-area");
+  if(!st){ st=d.createElement("style"); st.id="tos-safe-area"; d.head.appendChild(st); }
+  // la tab bar del grid es h-14 (3.5rem = 56px) + el inset
+  st.textContent='nav[aria-label="Mobile navigation"]{padding-bottom:'+px+'px!important;height:calc(3.5rem + '+px+'px)!important}'
+    +'#main-content{padding-bottom:calc(3.5rem + '+px+'px)!important}';
+}
+try{
+  const _fr=document.getElementById("grvt-frame");
+  if(_fr) _fr.addEventListener("load", pushSafeArea);
+  addEventListener("orientationchange", ()=>setTimeout(pushSafeArea,250));
+  addEventListener("resize", ()=>{clearTimeout(window._saT); window._saT=setTimeout(pushSafeArea,250);});
+}catch(e){}
+
 function applyTheme(t){
   document.documentElement.setAttribute("data-theme", t==="light"?"light":"dark");
   postGridTheme();   // push the same theme into the embedded grid iframe
+  pushSafeArea();
 }
 applyTheme(localStorage.getItem("tradeos-theme")||"dark");
 $("btn-theme").addEventListener("click",()=>{
