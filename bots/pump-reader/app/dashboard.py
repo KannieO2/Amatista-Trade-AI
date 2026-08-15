@@ -9,8 +9,24 @@ DASHBOARD_HTML = r"""<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- viewport-fit=cover deja que el contenido use el area del notch; los
+     safe-area-inset-* del CSS se encargan de que nada quede debajo. Sin esto
+     iOS reserva barras negras arriba y abajo en modo standalone. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Amatista · TradeOS</title>
+<!-- PWA: instalable desde Safari con "Anadir a pantalla de inicio". iOS
+     ignora display/name del manifest para el arranque, asi que las
+     apple-mobile-web-app-* siguen siendo necesarias en 2026. -->
+<link rel="manifest" href="/manifest.webmanifest" />
+<meta name="theme-color" content="#080b11" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<!-- black-translucent = la barra de estado se pinta sobre el fondo de la app
+     en vez de dejar una franja gris -->
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Amatista" />
+<link rel="apple-touch-icon" href="/icon-180.png" />
+<link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -162,12 +178,24 @@ DASHBOARD_HTML = r"""<!doctype html>
     .sidebar{flex-direction:row;align-items:center;gap:8px;padding:8px 10px;border-right:0;border-bottom:1px solid var(--border-soft);overflow-x:auto;position:sticky;top:0;z-index:30;-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px)}
     .sidebar .navlabel{display:none}
     .sidebar .brand{flex:0 0 auto;margin:0}
-    .nav{flex-direction:row;gap:4px;flex:1;overflow-x:auto;scrollbar-width:none}
+    /* .nav es un <nav> sin regla base, o sea display:block — el
+       flex-direction:row de abajo no hacía NADA y los items se apilaban
+       vertical. Medido a 414px: .nav 244x192, .sidebar 209 de alto y el
+       topbar otros 138 = 347px (39% de la pantalla) de cromo antes del
+       primer dato. El display:flex es lo que lo vuelve una tira. */
+    .nav{display:flex;align-items:center;flex-direction:row;gap:4px;flex:1;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
     .nav::-webkit-scrollbar{display:none}
-    .nav a{white-space:nowrap;padding:8px 11px;font-size:12px}
-    .topbar{flex-wrap:wrap;gap:8px;padding:9px 12px}
+    .nav a{white-space:nowrap;padding:8px 11px;font-size:12px;flex:0 0 auto}
+    /* el badge usa margin-left:auto (pensado para la columna): en fila
+       empuja el texto y descuadra la pastilla */
+    .nav a .badge{margin-left:6px}
+    .topbar{flex-wrap:nowrap;gap:8px;padding:8px 12px}
     .search{display:none}
-    .tb-actions{flex-wrap:wrap;gap:6px;margin-left:auto}
+    /* scroll horizontal en vez de wrap: 8 pastillas no entran en 414px y
+       envolvían en 3 filas */
+    .tb-actions{flex-wrap:nowrap;gap:6px;margin-left:auto;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+    .tb-actions::-webkit-scrollbar{display:none}
+    .tb-actions .pill{flex:0 0 auto}
     .view{padding:12px}
     .grid-kpi{grid-template-columns:1fr 1fr;gap:10px}
     .vhead{flex-direction:column;align-items:flex-start;gap:6px}
@@ -178,13 +206,20 @@ DASHBOARD_HTML = r"""<!doctype html>
   }
   @media(max-width:480px){
     body{font-size:12.5px}
-    .grid-kpi{grid-template-columns:1fr}
+    /* 1 KPI por fila desperdicia media pantalla en un telefono: las tarjetas
+       quedan de 340px de ancho para mostrar un numero. Dos entran bien. */
+    .grid-kpi{grid-template-columns:repeat(2,1fr);gap:8px}
     .sidebar .brand b+span,.sidebar .brand span{display:none}
+    .sidebar{padding:6px 8px}
     .nav a svg{width:14px;height:14px}
+    .nav a .badge{display:none}
     .pill{padding:6px 9px;font-size:11px}
     .modeswitch button{padding:7px 10px;font-size:11px}
     .modeswitch button svg{display:none}
     .vhead h1{font-size:17px}
+    .card{padding:12px;border-radius:12px}
+    /* respeta el notch y la barra de gestos del iPhone */
+    .view{padding:10px;padding-left:max(10px,env(safe-area-inset-left));padding-right:max(10px,env(safe-area-inset-right));padding-bottom:max(10px,env(safe-area-inset-bottom))}
   }
   body{overflow-x:hidden}
   /* wide tables scroll inside their panel instead of breaking the page */

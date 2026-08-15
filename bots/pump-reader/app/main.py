@@ -16,6 +16,7 @@ import statistics
 import sys
 import traceback
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from datetime import UTC, datetime, timedelta
@@ -29,8 +30,10 @@ from dotenv import load_dotenv
 # read these at import time (store, executor, velocity, …).
 load_dotenv()
 
-from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import FastAPI, Form, HTTPException, Request, Response
+from fastapi.responses import (
+    FileResponse, HTMLResponse, JSONResponse, RedirectResponse,
+)
 from pydantic import BaseModel, Field
 
 from . import auth as auth_mod
@@ -2116,7 +2119,12 @@ app = FastAPI(title="TradeOS AI Pump Reader", version="0.4.0", lifespan=lifespan
 # Same-origin reverse proxy to the real GRVTBot (Node) under /grid/*.
 register_grvt_proxy(app)
 
-_PUBLIC_PATHS = {"/login", "/logout", "/health"}
+# El manifest y los iconos van SIN auth a proposito: iOS los pide al instalar
+# la PWA, y en ese momento no manda la cookie de sesion. Si contestan 401 o
+# redirigen a /login, "Anadir a pantalla de inicio" guarda un icono roto y
+# arranca en la pantalla de login. Son assets estaticos sin nada sensible.
+_PWA_PATHS = {"/manifest.webmanifest", "/icon-180.png", "/icon-192.png", "/icon-512.png"}
+_PUBLIC_PATHS = {"/login", "/logout", "/health"} | _PWA_PATHS
 
 # Admin-only page to create/manage the per-user accounts. Same dark palette as
 # the dashboard + login. Reached at /admin (gated to role=admin in _auth_gate).
@@ -2643,6 +2651,50 @@ def _to_candidate(scanned: ScannedCandidate) -> TokenCandidate:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "pump-reader"}
+
+
+# --- PWA: instalable en el iPhone desde Safari ---------------------------
+# "start_url": "/" y "display": "standalone" hacen que abra sin barra de
+# Safari. iOS no lee display/name del manifest para el arranque (usa las
+# apple-mobile-web-app-* del <head>), pero sí lo necesita para reconocerla
+# como instalable, y Android/Chrome sí lo usa entero.
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+_MANIFEST = {
+    "name": "Amatista · TradeOS",
+    "short_name": "Amatista",
+    "description": "Pump Reader y Grid Bot",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "orientation": "portrait",
+    "background_color": "#080b11",
+    "theme_color": "#080b11",
+    "icons": [
+        {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+        {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"},
+        # 'maskable' deja que Android recorte el icono a su forma sin comerse
+        # el diamante — por eso los PNG llevan 20% de margen.
+        {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png",
+         "purpose": "maskable"},
+    ],
+}
+
+
+@app.get("/manifest.webmanifest")
+async def pwa_manifest() -> Response:
+    return JSONResponse(_MANIFEST, media_type="application/manifest+json")
+
+
+@app.get("/icon-{size}.png")
+async def pwa_icon(size: str) -> Response:
+    if size not in {"180", "192", "512"}:
+        return JSONResponse({"detail": "not found"}, status_code=404)
+    path = _STATIC_DIR / f"icon-{size}.png"
+    if not path.is_file():
+        return JSONResponse({"detail": "not found"}, status_code=404)
+    return FileResponse(path, media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/diagnostics")
