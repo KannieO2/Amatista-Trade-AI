@@ -24,6 +24,9 @@
 import { GRVTClient, type GrvtClientCreds } from './client.js';
 import { decryptCredentialFields } from '../auth/crypto.js';
 import type { GridBotDB } from '../database/db.js';
+import { childLogger } from '../server/logger.js';
+
+const log = childLogger('grvt-client-factory');
 
 interface CacheEntry {
   client: GRVTClient;
@@ -89,7 +92,43 @@ export async function getGrvtClientForBot(
   };
   const client = new GRVTClient(creds);
 
-  const ok = await client.login();
+  // Reintentos con backoff. Sin esto, un parpadeo de GRVT en el arranque
+  // dejaba bots pausados EN SILENCIO: loadActiveBots() (grid-engine.ts:1159)
+  // captura el throw, marca `status:'paused'` y sigue. Las órdenes quedan
+  // vivas en el exchange pero el motor deja de vigilarlas, y ninguna pantalla
+  // lo dice. Pasó 3 veces el 2026-08-14 durante reinicios del contenedor: los
+  // bots 7 y 8 quedaron pausados con 20/20 y 7/7 órdenes puestas y hubo que
+  // levantarlos a mano.
+  //
+  // El backoff se mantiene corto a propósito: una credencial revocada de
+  // verdad debe seguir fallando rápido para que v2-router la convierta en el
+  // 422 `grvt_credentials_invalid` que manda al usuario a Settings. 4 intentos
+  // ~11s cubre el rate-limit transitorio sin colgar el arranque.
+  //
+  // El mensaje final se conserva palabra por palabra: v2-router.ts lo matchea
+  // por texto para emitir ese 422.
+  const attempts = Math.max(1, Number(process.env.GRVT_LOGIN_ATTEMPTS ?? 4));
+  const backoffMs = [1000, 3000, 7000];
+  let ok = false;
+  let lastErr: unknown = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      ok = await client.login();
+      if (ok) break;
+    } catch (err) {
+      lastErr = err;
+      ok = false;
+    }
+    if (i < attempts - 1) {
+      const wait = backoffMs[Math.min(i, backoffMs.length - 1)]!;
+      log.warn(
+        { userId, subAccountId, attempt: i + 1, of: attempts, retryInMs: wait,
+          err: lastErr ? (lastErr as Error).message : 'login returned false' },
+        'GRVT login failed, reintentando'
+      );
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
   if (!ok) {
     throw new Error(
       `GRVT login failed for user ${userId}${subAccountId != null ? ` sub-account ${subAccountId}` : ''}`
