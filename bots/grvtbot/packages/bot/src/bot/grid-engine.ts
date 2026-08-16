@@ -2804,6 +2804,33 @@ export class GridBotInstance {
     const ticker = await this.grvt.getTicker(this.bot.pair);
     const currentPrice = parseFloat(ticker.last_price);
 
+    // Un ticker fallido NO llega como error: el cliente rellena los campos
+    // que faltan con '0' (client.ts hace `data.x || '0'`), asi que
+    // parseFloat devuelve un CERO perfectamente valido y el resto del tick
+    // lo trata como precio real.
+    //
+    // Lo que pasaba (medido el 2026-08-16, bots 7 y 8): el detector de
+    // auto-shift veia 0 < lower_price, calculaba exitDist = 4013% y pedia
+    // re-centrar la grilla en cero -> newLower -7.5, newUpper 7.5.
+    //
+    //   {"botId":7,"currentPrice":0,"exitDist":4013.33,
+    //    "newLower":-7.5,"newUpper":7.5,"msg":"auto-shift triggered"}
+    //
+    // Lo frenó buildRangeUpdatePlan, que relee el ticker y tira "invalid
+    // ticker price" — pero depender de esa segunda red es fragil: el mismo
+    // cero alimenta el safeguard de liquidacion, donde
+    // ((0 - liq) / 0) * 100 da -Infinity.
+    //
+    // Saltear el tick es inofensivo: el monitor vuelve a correr en ~20s.
+    // Operar con precio cero no lo es.
+    if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+      log.warn(
+        { botId: this.bot.id, pair: this.bot.pair, lastPrice: ticker.last_price },
+        'ticker sin precio valido — se saltea el tick'
+      );
+      return;
+    }
+
     // 2.5. SAFEGUARD: liquidation proximity check (C.4). Opt-in per bot.
     // Throws a SAFEGUARD:<action>: error that monitorAllBots() parses to
     // decide whether to pause or pause+close. No-op when the bot has no
