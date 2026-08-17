@@ -4,6 +4,7 @@
 // Built with pure CSS grid + inline background-color (no charting lib needed).
 
 import { Fragment, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { FillRow, GridLevel } from '@/lib/api-types';
 import { Mono } from '../primitives/mono';
 
@@ -247,19 +248,28 @@ export function FillHeatmap({ fills, levels, spacing }: FillHeatmapProps) {
         </div>
       </div>
 
-      {/* Tooltip */}
-      {tooltip && (
-        <div
-          className="fixed z-50 px-2 py-1 rounded bg-bg-elevated border border-border-subtle text-2xs text-text-secondary shadow-lg pointer-events-none whitespace-nowrap"
-          style={{
-            left: tooltip.x,
-            top: tooltip.y,
-            transform: tooltip.above ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
-          }}
-        >
-          <Mono>{tooltip.text}</Mono>
-        </div>
-      )}
+      {/* Tooltip — va por PORTAL a document.body a proposito.
+          globals.css aplica `animation: riseIn ... both` a #main-content > *.
+          El fill-mode `both` deja la animacion rellenando para siempre, y una
+          animacion que toca `transform` crea un bloque contenedor: con el
+          tooltip dentro del arbol, su `position: fixed` se resolvia contra la
+          tarjeta en vez de contra la ventana y aparecia cientos de px mas
+          abajo, encima de otras secciones. El portal lo saca de #main-content
+          y las coordenadas de getBoundingClientRect vuelven a valer. */}
+      {tooltip &&
+        createPortal(
+          <div
+            className="fixed z-50 px-2 py-1 rounded bg-bg-elevated border border-border-subtle text-2xs text-text-secondary shadow-lg pointer-events-none whitespace-nowrap"
+            style={{
+              left: tooltip.x,
+              top: tooltip.y,
+              transform: tooltip.above ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
+            }}
+          >
+            <Mono>{tooltip.text}</Mono>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
