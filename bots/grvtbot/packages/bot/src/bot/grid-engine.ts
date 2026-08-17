@@ -2108,7 +2108,25 @@ export class GridEngine extends EventEmitter {
       // IGNORE on fill_id silently discards everything. Filter
       // client-side instead. Discovered 2026-05-03 — bot 44 (ETH) had
       // ingested 291 SOL fills from bot 48 across 8 days.
-      const ownFills = allFills.filter((f) => f.instrument === instrument);
+      //
+      // El mismo bug cruzando TIEMPO en vez de pares: la respuesta trae los
+      // ultimos 1000 fills de la subcuenta, asi que un bot nuevo se quedaba
+      // con los del bot ANTERIOR del mismo par — tipicamente la venta de
+      // cierre, que es taker y por eso cara.
+      //
+      // Medido el 2026-08-17: los bots 3, 4, 5 y 7 tenian exactamente un
+      // fill ajeno cada uno. En el bot 7 inflaba las comisiones de $0.0242
+      // (lo que cobro GRVT) a $0.0600 — 147% de mas. No llego a ensuciar
+      // paired_roundtrips porque el emparejamiento exige una compra que
+      // calce, y una venta de cierre huerfana no la tiene; pero si hacia ver
+      // peor la ganancia neta de grilla en el dashboard.
+      const botStartMs = bot.created_at ? new Date(bot.created_at).getTime() : 0;
+      const ownFills = allFills.filter((f) => {
+        if (f.instrument !== instrument) return false;
+        // event_time viene en nanosegundos
+        const tMs = Number(f.event_time) / 1_000_000;
+        return Number.isFinite(tMs) ? tMs >= botStartMs : true;
+      });
 
       let added = 0;
       let feeSum = 0;
