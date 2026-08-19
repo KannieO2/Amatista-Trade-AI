@@ -1908,7 +1908,29 @@ export class GridEngine extends EventEmitter {
       `📊 Plan: ${plan.newTotalLevels} levels (${plan.newBuyLevels} buys, ${plan.newSellLevels} sells), need ${plan.ethNeeded.toFixed(4)} ETH, position ${plan.currentPosition.toFixed(4)} ETH, deficit ${plan.ethDeficit.toFixed(4)} ETH`
     );
 
-    // Step 1: ETH auto-purchase
+    // Step 1: Cancel old GRVT orders (best-effort).
+    // This frees up margin required for the auto-buy step.
+    for (const orderRef of plan.ordersToCancelSample.length === plan.ordersToCancel
+      ? plan.ordersToCancelSample
+      : (await db.getGridLevels(plan.botId))
+          .filter(
+            (l) =>
+              l.order_id &&
+              l.order_id !== '0x00' &&
+              l.order_id !== 'price_based_detection'
+          )
+          .map((l) => ({ order_id: l.order_id!, price: l.price }))) {
+      try {
+        await client.cancelOrder(orderRef.order_id, bot.pair);
+        log.info(`🗑️ Cancelled order ${orderRef.order_id} @ $${orderRef.price}`);
+      } catch (cancelErr) {
+        log.info(
+          `⚠️ Could not cancel order ${orderRef.order_id}: ${(cancelErr as Error).message}`
+        );
+      }
+    }
+
+    // Step 2: ETH auto-purchase
     if (plan.autoBuy) {
       log.info(
         `💰 Market-buying ${plan.autoBuy.size.toFixed(4)} ETH at ~$${plan.autoBuy.estimatedPrice} (deficit fill)`
@@ -1948,27 +1970,6 @@ export class GridEngine extends EventEmitter {
       log.info(
         `✅ Auto-buy filled. Position now ${postPosition.toFixed(4)} ETH`
       );
-    }
-
-    // Step 2: Cancel old GRVT orders (best-effort).
-    for (const orderRef of plan.ordersToCancelSample.length === plan.ordersToCancel
-      ? plan.ordersToCancelSample
-      : (await db.getGridLevels(plan.botId))
-          .filter(
-            (l) =>
-              l.order_id &&
-              l.order_id !== '0x00' &&
-              l.order_id !== 'price_based_detection'
-          )
-          .map((l) => ({ order_id: l.order_id!, price: l.price }))) {
-      try {
-        await client.cancelOrder(orderRef.order_id, bot.pair);
-        log.info(`🗑️ Cancelled order ${orderRef.order_id} @ $${orderRef.price}`);
-      } catch (cancelErr) {
-        log.info(
-          `⚠️ Could not cancel order ${orderRef.order_id}: ${(cancelErr as Error).message}`
-        );
-      }
     }
 
     // Step 3: Atomic DB replacement of all grid_levels.
